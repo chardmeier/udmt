@@ -1,5 +1,6 @@
 from dependency import conll_trees, tree_to_udmt, UDMTException
 
+import re
 import sys
 
 
@@ -14,16 +15,20 @@ tex_header = r'''
 tex_footer = r'\end{document}'
 
 
+def tex_escape(s):
+    return re.sub(r'[^A-Za-z0-9_.,:;/-]', '_')
+
+
 def show_tree(udmt_tree, f):
     print(r'\begin{dependency}', file=f)
     print(r'\begin{deptext}', file=f)
     print(r'\&'.join(str(i) for i in range(len(udmt_tree))) + r'\\', file=f)
-    print(r'\&'.join(n.pos for n in udmt_tree) + r'\\', file=f)
-    print(r'\&'.join(n.token for n in udmt_tree) + r'\\', file=f)
+    print(r'\&'.join(tex_escape(n.pos) for n in udmt_tree) + r'\\', file=f)
+    print(r'\&'.join(tex_escape(n.token) for n in udmt_tree) + r'\\', file=f)
     print(r'\end{deptext}', file=f)
     for head in udmt_tree:
         for mod in head.children:
-            print(r'\depedge{%d}{%d}{%s}' % (mod.index + 1, head.index + 1, mod.deprel), file=f)
+            print(r'\depedge{%d}{%d}{%s}' % (mod.index + 1, head.index + 1, tex_escape(mod.deprel)), file=f)
     print(r'\end{dependency}', file=f)
     udmt_features = [(n.index, n.udmt_features) for n in udmt_tree if n.udmt_features]
     if udmt_features:
