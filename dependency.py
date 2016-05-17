@@ -1,3 +1,6 @@
+FNWORD_POS = {'ADP', 'AUX', 'CONJ', 'DET', 'PART', 'PRON', 'PUNCT', 'SCONJ'}
+
+
 def load_conll(f):
     nodes = []
     root = Node(nodes, None)

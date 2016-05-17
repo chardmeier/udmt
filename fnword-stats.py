@@ -1,4 +1,4 @@
-from dependency import load_conll
+from dependency import FNWORD_POS, load_conll
 
 import itertools
 import sys
@@ -10,8 +10,6 @@ def main():
         sys.exit(1)
     conll_file = sys.argv[1]
 
-    fnword_pos = {'ADP', 'AUX', 'CONJ', 'DET', 'PART', 'PRON', 'PUNCT', 'SCONJ'}
-
     with open(conll_file, 'r') as f:
         while True:
             nodes = load_conll(f)
@@ -19,10 +17,10 @@ def main():
                 break
 
             for n in nodes:
-                if n.pos in fnword_pos:
+                if n.pos in FNWORD_POS:
                     # path to next content word head
                     ptr = list(n.path_to_root())
-                    path_to_content_head = list(itertools.takewhile(lambda x: x.pos in fnword_pos, ptr))
+                    path_to_content_head = list(itertools.takewhile(lambda x: x.pos in FNWORD_POS, ptr))
                     path_to_content_head.append(ptr[len(path_to_content_head)])
 
                     content_head = path_to_content_head[-1]
