@@ -1,4 +1,4 @@
-from dependency import FNWORD_POS, load_conll
+from dependency import FNWORD_POS, conll_trees
 
 import itertools
 import sys
@@ -11,11 +11,7 @@ def main():
     conll_file = sys.argv[1]
 
     with open(conll_file, 'r') as f:
-        while True:
-            nodes = load_conll(f)
-            if not nodes:
-                break
-
+        for nodes in conll_trees(f):
             for n in nodes:
                 if n.pos in FNWORD_POS:
                     # path to next content word head
