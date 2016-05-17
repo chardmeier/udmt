@@ -1,4 +1,4 @@
-from extra.dependency import load_conll
+from dependency import load_conll
 
 import itertools
 import sys
