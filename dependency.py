@@ -23,7 +23,7 @@ class UDMTException(Exception):
 
 
 def tree_to_udmt_traverse_fnword(n):
-    if n.pos not in FNWORD_POS:
+    if not n.is_function_word():
         raise UDMTException("Function word with content word modifier: %s" % n)
 
     myself = [(n.token, n.pos, n.deprel)]
@@ -38,12 +38,13 @@ def tree_to_udmt_traverse_fnword(n):
 
 def tree_to_udmt_traverse(root):
     udmt_nodes = []
-    for n in root.children:
-        udmt = copy.copy(n)
-        udmt.nodes = udmt_nodes
-        udmt_nodes.append(udmt)
 
-        if n.pos in FNWORD_POS:
+    udmt = copy.copy(root)
+    udmt.nodes = udmt_nodes
+    udmt_nodes.append(udmt)
+
+    for n in root.children:
+        if n.is_function_word():
             fw = tree_to_udmt_traverse_fnword(n)
             udmt.udmt_features.append(fw)
         else:
@@ -95,6 +96,9 @@ class Node:
 
     def is_root(self):
         return self.head is None
+
+    def is_function_word(self):
+        return self.pos in FNWORD_POS or (self.pos == 'VERB' and self.deprel == 'cop')
 
     def path_to_root(self):
         n = self
