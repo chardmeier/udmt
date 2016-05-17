@@ -1,6 +1,14 @@
 FNWORD_POS = {'ADP', 'AUX', 'CONJ', 'DET', 'PART', 'PRON', 'PUNCT', 'SCONJ'}
 
 
+def conll_trees(file):
+    while True:
+        tree = load_conll(file)
+        if tree is None:
+            break
+        yield tree
+
+
 def load_conll(f):
     nodes = []
     root = Node(nodes, None)
