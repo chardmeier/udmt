@@ -9,6 +9,7 @@ def conll_trees(conll_file):
     for key, group in itertools.groupby(conll_file, lambda l: l == '\n'):
         if not key:
             nodes = []
+            nodes.append(Node(nodes))
             for line in group:
                 nodes.append(Node(nodes, conll_line=line.rstrip('\n')))
             for n in nodes[1:]:
@@ -102,4 +103,4 @@ class Node:
             yield n
 
     def __str__(self):
-        return '[%d:%s/%s-%s:%d]' % (self.index, self.token, self.pos, self.deprel, self.head_idx)
+        return '[%d:%s/%s-%s:%s]' % (self.index, self.token, self.pos, self.deprel, self.head_idx)
