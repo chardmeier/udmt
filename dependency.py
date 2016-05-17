@@ -36,10 +36,11 @@ def tree_to_udmt_traverse_fnword(n):
         raise UDMTException("Function word with multiple children: %s <- %s" % (n, [str(n) for n in n.children]))
 
 
-def tree_to_udmt_traverse(root):
-    udmt_nodes = []
-
+def tree_to_udmt_traverse(root, udmt_nodes):
     udmt = copy.copy(root)
+    udmt.children = []
+    udmt.udmt_features = []
+
     udmt.nodes = udmt_nodes
     udmt_nodes.append(udmt)
 
@@ -48,16 +49,19 @@ def tree_to_udmt_traverse(root):
             fw = tree_to_udmt_traverse_fnword(n)
             udmt.udmt_features.append(fw)
         else:
-            udmt_nodes.extend(tree_to_udmt_traverse(n))
+            child = tree_to_udmt_traverse(n, udmt_nodes)
+            child.head = udmt
+            udmt.children.append(child)
 
-    return udmt_nodes
+    return udmt
 
 
 def tree_to_udmt(nodes):
     if not nodes:
         return nodes
 
-    udmt_nodes = tree_to_udmt_traverse(nodes[0])
+    udmt_nodes = []
+    tree_to_udmt_traverse(nodes[0], udmt_nodes)
     udmt_nodes.sort(key=lambda x: x.word_idx)
 
     for i, n in enumerate(udmt_nodes):
