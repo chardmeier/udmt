@@ -102,4 +102,4 @@ class Node:
             yield n
 
     def __str__(self):
-        return '[%d:%s/%s-%s]' % (self.index, self.token, self.pos, self.deprel)
+        return '[%d:%s/%s-%s:%d]' % (self.index, self.token, self.pos, self.deprel, self.head_idx)
