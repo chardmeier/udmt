@@ -1,30 +1,20 @@
 import copy
+import itertools
 
 
 FNWORD_POS = {'ADP', 'AUX', 'CONJ', 'DET', 'PART', 'PRON', 'PUNCT', 'SCONJ'}
 
 
-def conll_trees(file):
-    while True:
-        tree = load_conll(file)
-        if tree is None:
-            break
-        yield tree
-
-
-def load_conll(f):
-    nodes = []
-    root = Node(nodes, None)
-    nodes.append(root)
-    while True:
-        line = f.readline().rstrip('\n')
-        if not line:
-            break
-        nodes.append(Node(nodes, line))
-    for n in nodes[1:]:
-        n.head = nodes[n.head_idx]
-        n.head.children.append(n)
-    return nodes
+def conll_trees(conll_file):
+    for key, group in itertools.groupby(conll_file, lambda l: l == '\n'):
+        if not key:
+            nodes = []
+            for line in group:
+                nodes.append(Node(nodes, conll_line=line.rstrip('\n')))
+            for n in nodes[1:]:
+                n.head = nodes[n.head_idx]
+                n.head.children.append(n)
+            yield nodes
 
 
 class UDMTException(Exception):
