@@ -75,6 +75,7 @@ def tree_to_udmt(nodes):
 
     return udmt_nodes
 
+
 class Node:
     def __init__(self, nodes, conll_line=None):
         self.nodes = nodes
