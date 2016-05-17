@@ -23,14 +23,14 @@ class UDMTException(Exception):
 
 
 def tree_to_udmt_traverse_fnword(n):
-    if not n.is_function_word():
-        raise UDMTException("Function word with content word modifier: %s" % n)
-
     myself = [(n.token, n.pos, n.deprel)]
     if not n.children:
         return myself
     elif len(n.children) == 1:
-        children = tree_to_udmt_traverse_fnword(n.children[0])
+        my_child = n.children[0]
+        if not my_child.is_function_word():
+            raise UDMTException("Function word with content word modifier: %s <- %s" % (n, my_child))
+        children = tree_to_udmt_traverse_fnword(my_child)
         return myself + children
     else:
         raise UDMTException("Function word with multiple children: %s" % n)
