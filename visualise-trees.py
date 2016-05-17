@@ -16,7 +16,7 @@ tex_footer = r'\end{document}'
 
 
 def tex_escape(s):
-    return re.sub(r'[^A-Za-z0-9_.,:;/-]', '_', s)
+    return re.sub(r'[^A-Za-z0-9_.,:;/-]', '=', s)
 
 
 def show_tree(udmt_tree, f):
