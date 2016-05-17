@@ -33,7 +33,7 @@ def tree_to_udmt_traverse_fnword(n):
         children = tree_to_udmt_traverse_fnword(my_child)
         return myself + children
     else:
-        raise UDMTException("Function word with multiple children: %s" % n)
+        raise UDMTException("Function word with multiple children: %s <- %s" % (n, [str(n) for n in n.children]))
 
 
 def tree_to_udmt_traverse(root):
