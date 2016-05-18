@@ -87,16 +87,25 @@ class Node:
             self.index = int(fields[0])
             self.word_idx = self.index
             self.token = fields[1]
-            self.pos = fields[5]
-            self.head_idx = int(fields[9])
-            self.deprel = fields[11]
+            self.lemma = fields[2]
+            self.pos = fields[3]
+            self.xpos = fields[4]
+            self.features = fields[5].split('|') if fields[5] else []
+            self.head_idx = int(fields[6])
+            self.deprel = fields[7]
+            self.secondary_deps = fields[8]
+            self.misc = fields[9]
         else:
             self.index = 0
             self.word_idx = 0
             self.token = '[ROOT]'
             self.pos = 'ROOT'
+            self.xpos = 'ROOT'
+            self.features = []
             self.head_idx = None
             self.deprel = ''
+            self.secondary_deps = ''
+            self.misc = ''
 
     def is_root(self):
         return self.head is None
