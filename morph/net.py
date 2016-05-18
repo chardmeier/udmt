@@ -8,6 +8,7 @@ from nnet.nnet import create_optimizer, Net
 from nnet.vocabulary import Vocabulary
 
 import h5py
+import json
 import logging
 import numpy
 import sys
@@ -142,7 +143,7 @@ class AnalyserDataset:
 
 
 class Configuration:
-    def __init__(self):
+    def __init__(self, file=None):
         self.prop = {'max_sequence': 200,
                      'chars/size': 100,
                      'words/size': 100,
@@ -154,22 +155,28 @@ class Configuration:
                      'optimizer': 'rmsprop',
                      'learning_rate': .001}
 
+        with open(file, 'r') as f:
+            config = json.load(f)
+
+        self.prop.update(config)
+
     def get(self, x):
         return self.prop[x]
 
 
 def main():
-    if len(sys.argv) != 3:
-        sys.stderr.write('Usage: %s train.conllu val.conlllu\n' % sys.argv[0])
+    if len(sys.argv) != 4:
+        sys.stderr.write('Usage: %s config.json train.conllu val.conlllu\n' % sys.argv[0])
         sys.exit(1)
 
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s %(levelname)s %(''message)s')
 
-    train_file = sys.argv[1]
-    val_file = sys.argv[2]
+    config_file = sys.argv[1]
+    train_file = sys.argv[2]
+    val_file = sys.argv[3]
 
-    config = Configuration()
+    config = Configuration(config_file)
 
     logging.info('Loading training data from %s' % train_file)
     train = AnalyserDataset(config)
