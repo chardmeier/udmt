@@ -163,6 +163,9 @@ class Configuration:
     def get(self, x):
         return self.prop[x]
 
+    def to_json(self):
+        return json.dumps(self.prop, indent='\t')
+
 
 def main():
     if len(sys.argv) != 4:
