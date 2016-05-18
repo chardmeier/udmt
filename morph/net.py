@@ -79,6 +79,25 @@ class Analyser:
             f.flush()
 
 
+def load_analyser(file):
+    with h5py.File(file, 'r') as f:
+        grp = f['/udmt/morph_analyser']
+        config = Configuration(grp.attrs['config'])
+        voc = {}
+        for name, ds in grp['vocabularies'].items():
+            rev = list(ds)
+            # HDF5 stores None as empty string
+            if ds.shape[0] == 0:
+                sys.stderr.write('Warning: loaded empty vocabulary %s\n' % name)
+            elif not rev[0]:
+                rev[0] = None
+            voc[name] = Vocabulary()
+            voc[name].from_list(rev)
+    net = Net(Analyser(voc, config), config)
+    net.model.load_weights(file)
+    return net
+
+
 class AnalyserDataset:
     def __init__(self, config, voc=None):
         self.config = config
