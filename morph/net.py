@@ -147,6 +147,8 @@ class Configuration:
                      'chars/size': 100,
                      'words/size': 100,
 
+                     'output_file': 'final.hdf5',
+
                      'batch_size': 16,
                      'nepochs': 10,
                      'optimizer': 'rmsprop',
@@ -184,6 +186,9 @@ def main():
 
     logging.info('Training model')
     net.train(train, val)
+
+    logging.info('Saving model')
+    net.save(config.get('output_file'))
 
     logging.info('Done.')
 
