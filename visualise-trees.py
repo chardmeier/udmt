@@ -29,13 +29,14 @@ def show_tree(udmt_tree, f):
     for head in udmt_tree:
         for mod in head.children:
             print(r'\depedge{%d}{%d}{%s}' % (mod.index + 1, head.index + 1, tex_escape(mod.deprel)), file=f)
-    print(r'\end{dependency}', file=f)
+    print(r'\end{dependency}\\', file=f)
     udmt_features = [(n.index, n.udmt_features) for n in udmt_tree if n.udmt_features]
     if udmt_features:
         print(r'\begin{tabular}{cl}', file=f)
         for feat in udmt_features:
             print(r'%d&%s\\' % feat, file=f)
         print(r'\end{tabular}', file=f)
+    print(r'\bigskip\par')
 
 
 def main():
