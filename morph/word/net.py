@@ -59,7 +59,7 @@ class Lemmatiser:
 
         max_outlen = self.config.get('max_sequence')
 
-        opt = create_optimizer(self.config.get('optimizer'))
+        opt = create_optimizer(self.config)
 
         model = Sequential()
         model.add(Embedding(vocsize, enc_embedding, mask_zero=True))
@@ -97,7 +97,7 @@ class LemmatiserDataset:
             self.voc = voc
             self.append_voc = False
 
-        self._token_boundary = self.voc['chars'].lookup(' ', self.append_voc)
+        self._token_boundary = self.voc.lookup(' ', self.append_voc)
 
         self.max_seqlen = config.get('max_sequence')
         self.seqlen = 0
@@ -163,7 +163,7 @@ def main():
         val.load_data(f)
 
     logging.info('Creating model')
-    net = Net(LemmatiserDataset(train.voc, config), config)
+    net = Net(Lemmatiser(train.voc, config), config)
 
     logging.info('Training model')
     net.train(train, val)
