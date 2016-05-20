@@ -137,11 +137,33 @@ class LemmatiserDataset:
         return self.data['lemma']
 
 
+def seq_to_str(seq, voc):
+    rev = voc.reverse[:]
+    rev[0] = '_'
+    outstr = ''
+    for c in numpy.nditer(seq):
+        if c == 1:
+            break
+        outstr += rev[c]
+    return outstr
+
+
+def output_predictions(dataset, inpred):
+    inp = dataset.get_inputs()
+    truth = dataset.get_labels()
+    pred = numpy.argmax(inpred, axis=-1)
+    for i in range(pred.shape[0]):
+        inp_str = seq_to_str(inp[i, :], dataset.voc)
+        truth_str = seq_to_str(truth[i, :, 0], dataset.voc)
+        pred_str = seq_to_str(pred[i, :], dataset.voc)
+        print('%s\t%s\t%s' % (inp_str, truth_str, pred_str))
+
+
 def main():
     theano.config.optimizer = 'None'
     theano.config.exception_verbosity = 'high'
-    if len(sys.argv) != 4:
-        sys.stderr.write('Usage: %s config.json train.conllu val.conlllu\n' % sys.argv[0])
+    if len(sys.argv) != 5:
+        sys.stderr.write('Usage: %s config.json train.conllu val.conllu test.conllu\n' % sys.argv[0])
         sys.exit(1)
 
     logging.basicConfig(level=logging.INFO,
@@ -150,6 +172,7 @@ def main():
     config_file = sys.argv[1]
     train_file = sys.argv[2]
     val_file = sys.argv[3]
+    test_file = sys.argv[4]
 
     with open(config_file, 'r') as f:
         config = Configuration(f.read())
@@ -164,6 +187,11 @@ def main():
     with open(val_file, 'r') as f:
         val.load_data(f)
 
+    logging.info('Loading test data from %s' % val_file)
+    test = LemmatiserDataset(config, voc=train.voc)
+    with open(test_file, 'r') as f:
+        test.load_data(f)
+
     logging.info('Creating model')
     net = Net(Lemmatiser(train.voc, config), config)
 
@@ -172,6 +200,10 @@ def main():
 
     logging.info('Saving model')
     net.save(config.get('output_file'))
+
+    logging.info('Making predictions for test file.')
+    test_pred = net.predict(test)
+    output_predictions(test, test_pred)
 
     logging.info('Done.')
 
