@@ -62,7 +62,7 @@ class Lemmatiser:
         opt = create_optimizer(self.config.get('optimizer'))
 
         model = Sequential()
-        model.add(Embedding(vocsize, enc_embedding))
+        model.add(Embedding(vocsize, enc_embedding, mask_zero=True))
         model.add(enc_type(enc_size, return_sequences=False))
         model.add(Dropout(enc_dropout))
         model.add(RepeatVector(max_outlen))
