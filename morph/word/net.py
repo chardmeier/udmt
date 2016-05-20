@@ -10,6 +10,7 @@ import json
 import logging
 import numpy
 import sys
+import theano
 
 
 class Configuration:
@@ -68,7 +69,7 @@ class Lemmatiser:
         model.add(RepeatVector(max_outlen))
         model.add(dec_type(vocsize, return_sequences=True))
 
-        model.compile(optimizer=opt, loss='categorical_crossentropy')
+        model.compile(optimizer=opt, loss='sparse_categorical_crossentropy')
 
         return model
 
@@ -80,9 +81,8 @@ class Lemmatiser:
             strtype = h5py.special_dtype(vlen=str)
             for name in vocgrp.keys():
                 del vocgrp[name]
-            for name, voc in self.voc.items():
-                ds = vocgrp.create_dataset(name, (len(voc),), dtype=strtype)
-                ds[:] = voc.reverse[:]
+            ds = vocgrp.create_dataset('chars', (len(self.voc),), dtype=strtype)
+            ds[:] = self.voc.reverse[:]
             f.flush()
 
 
@@ -102,7 +102,7 @@ class LemmatiserDataset:
         self.max_seqlen = config.get('max_sequence')
         self.seqlen = 0
 
-        self.dtype = [('token', numpy.int32, self.max_seqlen), ('lemma', numpy.int32, self.max_seqlen)]
+        self.dtype = [('token', numpy.int32, self.max_seqlen), ('lemma', numpy.int32, (self.max_seqlen, 1))]
         self.data = numpy.zeros((0,), dtype=self.dtype)
 
     def __len__(self):
@@ -123,7 +123,7 @@ class LemmatiserDataset:
         self.data = numpy.zeros((len(data),), dtype=self.dtype)
         for i, (tok_chars, lemma_chars) in enumerate(data):
             self.data['token'][i, 0:len(tok_chars)] = tok_chars[:]
-            self.data['lemma'][i, 0:len(lemma_chars)] = lemma_chars[:]
+            self.data['lemma'][i, 0:len(lemma_chars), 0] = lemma_chars[:]
 
     def make_batch(self, perm):
         batch = LemmatiserDataset(self.config, voc=self.voc)
@@ -138,6 +138,8 @@ class LemmatiserDataset:
 
 
 def main():
+    theano.config.optimizer = 'None'
+    theano.config.exception_verbosity = 'high'
     if len(sys.argv) != 4:
         sys.stderr.write('Usage: %s config.json train.conllu val.conlllu\n' % sys.argv[0])
         sys.exit(1)
