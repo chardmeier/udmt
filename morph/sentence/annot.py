@@ -1,7 +1,7 @@
-from morph.net import AnalyserDataset, Configuration, load_analyser
-
 import logging
 import sys
+
+from morph.sentence.net import AnalyserDataset, load_analyser
 
 
 def main():
