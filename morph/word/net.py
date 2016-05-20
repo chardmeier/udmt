@@ -112,7 +112,7 @@ class LemmatiserDataset:
         data = []
         for tree in conll_trees(file):
             for n in tree[1:]:
-                if len(n.token) > self.max_seqlen or len(n.lemma) > self.max_seqlen:
+                if len(n.token) > self.max_seqlen - 1 or len(n.lemma) > self.max_seqlen - 1:
                     continue
                 tok_chars = list(self.voc.lookup(c, self.append_voc) for c in n.token)
                 tok_chars.append(self._token_boundary)
