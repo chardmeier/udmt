@@ -16,6 +16,7 @@ import sys
 
 class CharToWord(Layer):
     def __init__(self, token_boundary, **kwargs):
+        self.supports_masking = True
         self.token_boundary = token_boundary
         super(CharToWord, self).__init__(**kwargs)
 
@@ -27,7 +28,33 @@ class CharToWord(Layer):
         return input_shape[0]
 
     def call(self, x, mask=None):
-        return x[0]
+        chars = x[0]
+        boolean_mask = K.not_equal(chars[:, :, self.token_boundary], 0.0)
+        return x[0] * K.cast(boolean_mask, K.floatx())
+
+    def get_config(self):
+        config = {'token_boundary': self.token_boundary}
+        base_config = super(CharToWord, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))
+
+
+class SequenceLengthMasking(Layer):
+    def __init__(self, mask_value=0, **kwargs):
+        self.supports_masking = True
+        self.mask_value = mask_value
+        super(SequenceLengthMasking, self).__init__(**kwargs)
+
+    def compute_mask(self, inputs, input_mask=None):
+        return K.equal(inputs[:, :, self.mask_value], 0.0)
+
+    def call(self, x, mask=None):
+        boolean_mask = K.equal(x[:, :, self.mask_value], 0.0)
+        return x * K.cast(boolean_mask, K.floatx())
+
+    def get_config(self):
+        config = {'mask_value': self.mask_value}
+        base_config = super(SequenceLengthMasking, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))
 
 
 class Analyser:
@@ -43,7 +70,8 @@ class Analyser:
 
         wordlayersize = self.config.get('words/size')
 
-        x = LSTM(self.config.get('chars/size'), return_sequences=True, consume_less='gpu')(i_chars)
+        x = SequenceLengthMasking()(i_chars)
+        x = LSTM(self.config.get('chars/size'), return_sequences=True, consume_less='gpu')(x)
         x = CharToWord(token_boundary=token_boundary)([x, i_chars])
         x = LSTM(wordlayersize, return_sequences=True, consume_less='gpu')(x)
 
@@ -124,18 +152,20 @@ class AnalyserDataset:
         self.data = []
         for tree in conll_trees(file):
             chars = []
-            for n in tree[1:(self.max_seqlen + 1)]:
+            for n in tree[1:]:
                 idx_pos = self.voc['pos'].lookup(n.pos, self.append_voc)
                 idx_features = [self.voc['features'].lookup(ft, self.append_voc) for ft in n.features]
                 chars.extend((self.voc['chars'].lookup(c, self.append_voc),) for c in n.token)
                 chars.append((self._token_boundary, idx_pos, idx_features))
-            self.data.append(chars)
-        self.seqlen = max(len(x) for x in self.data)
+            self.data.append(chars[0:self.max_seqlen])
+        # self.seqlen = max(len(x) for x in self.data)
+        self.seqlen = self.max_seqlen
 
     def make_batch(self, perm):
         batch = AnalyserDataset(self.config, voc=self.voc)
         batch.data = [self.data[i] for i in numpy.nditer(perm)]
-        batch.seqlen = max(len(x) for x in batch.data)
+        # batch.seqlen = max(len(x) for x in batch.data)
+        batch.seqlen = self.max_seqlen
         return batch
 
     def get_inputs(self):
@@ -162,7 +192,7 @@ class AnalyserDataset:
 
 
 class Configuration:
-    def __init__(self, file=None):
+    def __init__(self, json_str=None):
         self.prop = {'max_sequence': 200,
                      'chars/size': 100,
                      'words/size': 100,
@@ -174,10 +204,9 @@ class Configuration:
                      'optimizer': 'rmsprop',
                      'learning_rate': .001}
 
-        with open(file, 'r') as f:
-            config = json.load(f)
-
-        self.prop.update(config)
+        if json_str is not None:
+            config = json.loads(json_str)
+            self.prop.update(config)
 
     def get(self, x):
         return self.prop[x]
@@ -198,7 +227,8 @@ def main():
     train_file = sys.argv[2]
     val_file = sys.argv[3]
 
-    config = Configuration(config_file)
+    with open(config_file, 'r') as f:
+        config = Configuration(f.read())
 
     logging.info('Loading training data from %s' % train_file)
     train = AnalyserDataset(config)
