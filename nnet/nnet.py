@@ -1,6 +1,6 @@
 from keras import backend as K
 from keras.callbacks import Callback, ModelCheckpoint
-from keras.optimizers import Adagrad, RMSprop
+from keras.optimizers import Adadelta, Adagrad, Adam, RMSprop
 
 import functools
 import numpy
@@ -12,6 +12,10 @@ def create_optimizer(config):
         opt = RMSprop(lr=config.prop['learning_rate'])
     elif config.prop['optimizer'] == 'adagrad':
         opt = Adagrad(lr=config.prop['learning_rate'])
+    elif config.prop['optimizer'] == 'adadelta':
+        opt = Adadelta()
+    elif config.prop['optimizer'] == 'adam':
+        opt = Adam()
     else:
         raise Exception('Unknown optimiser: %s' % config.prop['optimizer'])
     return opt
