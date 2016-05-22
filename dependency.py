@@ -11,6 +11,8 @@ def conll_trees(conll_file):
             nodes = []
             nodes.append(Node(nodes))
             for line in group:
+                if line.startswith('#'):
+                    continue
                 nodes.append(Node(nodes, conll_line=line.rstrip('\n')))
             for n in nodes[1:]:
                 n.head = nodes[n.head_idx]
