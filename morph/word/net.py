@@ -2,7 +2,7 @@ from dependency import conll_trees
 from nnet.nnet import create_optimizer, Net
 from nnet.vocabulary import Vocabulary
 
-from keras.layers import Dropout, Embedding, GRU, LSTM, RepeatVector
+from keras.layers import Activation, Dense, Dropout, Embedding, GRU, LSTM, RepeatVector, TimeDistributed
 from keras.models import Sequential
 
 import h5py
@@ -16,10 +16,14 @@ import theano
 class Configuration:
     def __init__(self, json_str=None):
         self.prop = {'max_sequence': 40,
+
                      'encoder/embedding': 10,
-                     'encoder/size': 40,
+                     'encoder/size': 100,
                      'encoder/dropout': 0.2,
                      'encoder/type': 'lstm',
+
+                     'decoder/size': 100,
+                     'decoder/dropout': 0.2,
                      'decoder/type': 'lstm',
 
                      'output_file': 'final.hdf5',
@@ -57,6 +61,8 @@ class Lemmatiser:
         enc_type = types[self.config.get('encoder/type')]
 
         dec_type = types[self.config.get('decoder/type')]
+        dec_size = self.config.get('decoder/size')
+        dec_dropout = self.config.get('decoder/dropout')
 
         max_outlen = self.config.get('max_sequence')
 
@@ -67,7 +73,10 @@ class Lemmatiser:
         model.add(enc_type(enc_size, return_sequences=False))
         model.add(Dropout(enc_dropout))
         model.add(RepeatVector(max_outlen))
-        model.add(dec_type(vocsize, return_sequences=True))
+        model.add(dec_type(dec_size, return_sequences=True))
+        model.add(Dropout(dec_dropout))
+        model.add(TimeDistributed(Dense(vocsize)))
+        model.add(Activation('softmax'))
 
         model.compile(optimizer=opt, loss='sparse_categorical_crossentropy')
 
@@ -199,7 +208,7 @@ def main():
     net.train(train, val)
 
     logging.info('Saving model')
-    net.save(config.get('output_file'))
+    net.save(config_file + '.hdf5')
 
     logging.info('Making predictions for test file.')
     test_pred = net.predict(test)
