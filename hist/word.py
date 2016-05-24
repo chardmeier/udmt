@@ -131,7 +131,7 @@ class WordTransformer(Initializable):
         recurrent_unit = typedict[recurrent_type]
 
         encoder = Bidirectional(
-            recurrent_unit(dim=dimension))
+            recurrent_unit(activation=Tanh(), dim=dimension))
         fork = Fork([name for name in encoder.prototype.apply.sequences
                      if name != 'mask'])
         fork.input_dim = dimension
