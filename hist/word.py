@@ -87,9 +87,12 @@ def _is_nan(log):
     return math.isnan(log.current_row['total_gradient_norm'])
 
 
-def load_historical(infile, voc=None):
+def load_historical(infile, voc=None, autoencoder=False):
     with open(infile, 'r') as f:
-        items = [tuple(line.rstrip('\n').split('\t')) for line in f]
+        if autoencoder:
+            items = [(line.rstrip('\n'),) * 2 for line in f]
+        else:
+            items = [tuple(line.rstrip('\n').split('\t')) for line in f]
 
     if voc is None:
         chars = set(itertools.chain(*(x[0] + x[1] for x in items)))
@@ -390,9 +393,12 @@ def main():
     parser.add_argument(
         "--step-rule", choices=["original", "rmsprop", "rms+mom", "adam", "adagrad"], default="original",
         help="The step rule for the search algorithm")
+    parser.add_argument(
+        "--autoencoder", default=False, type=bool,
+        help="Train an autoencoder instead of a transducer")
     args = parser.parse_args()
 
-    dataset, voc = load_historical(args.traincorpus)
+    dataset, voc = load_historical(args.traincorpus, autoencoder=args.autoencoder)
 
     transformer = WordTransformer(100, len(voc), name="transformer", recurrent_type=args.recurrent_type)
 
