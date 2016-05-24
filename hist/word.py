@@ -1,13 +1,15 @@
-from __future__ import print_function
+# From blocks-examples/reverse_words
+
 import logging
 import pprint
+import itertools
+import collections
 import math
 import numpy
 import traceback
 import operator
 
 import theano
-from six.moves import input
 from picklable_itertools.extras import equizip
 from theano import tensor
 
@@ -22,7 +24,7 @@ from blocks.bricks.sequence_generators import (
 from blocks.config import config
 from blocks.graph import ComputationGraph
 from fuel.transformers import Mapping, Batch, Padding, Filter
-from fuel.datasets import OneBillionWord, TextFile
+from fuel.datasets import IndexableDataset, OneBillionWord, TextFile
 from fuel.schemes import ConstantScheme
 from blocks.serialization import load_parameters
 from blocks.algorithms import (GradientDescent, Scale,
@@ -44,30 +46,30 @@ floatX = theano.config.floatX
 logger = logging.getLogger(__name__)
 
 # Dictionaries
-all_chars = ([chr(ord('a') + i) for i in range(26)] +
-             [chr(ord('0') + i) for i in range(10)] +
-             [',', '.', '!', '?', '<UNK>'] +
-             [' ', '<S>', '</S>'])
-code2char = dict(enumerate(all_chars))
-char2code = {v: k for k, v in code2char.items()}
+# all_chars = ([chr(ord('a') + i) for i in range(26)] +
+#              [chr(ord('0') + i) for i in range(10)] +
+#              [',', '.', '!', '?', '<UNK>'] +
+#              [' ', '<S>', '</S>'])
+# code2char = dict(enumerate(all_chars))
+# char2code = {v: k for k, v in code2char.items()}
 
 
-def reverse_words(sample):
-    sentence = sample[0]
-    result = []
-    word_start = -1
-    for i, code in enumerate(sentence):
-        if code >= char2code[' ']:
-            if word_start >= 0:
-                result.extend(sentence[i - 1:word_start - 1:-1])
-                word_start = -1
-            result.append(code)
-        else:
-            if word_start == -1:
-                word_start = i
-    return (result,)
-
-
+# def reverse_words(sample):
+#     sentence = sample[0]
+#     result = []
+#     word_start = -1
+#     for i, code in enumerate(sentence):
+#         if code >= char2code[' ']:
+#             if word_start >= 0:
+#                 result.extend(sentence[i - 1:word_start - 1:-1])
+#                 word_start = -1
+#             result.append(code)
+#         else:
+#             if word_start == -1:
+#                 word_start = i
+#     return (result,)
+#
+#
 def _lower(s):
     return s.lower()
 
@@ -84,7 +86,36 @@ def _is_nan(log):
     return math.isnan(log.current_row['total_gradient_norm'])
 
 
-class WordReverser(Initializable):
+def load_historical(part, voc=None):
+    infile = 'data/german.de-hs.%s.hsde' % part
+    with open(infile, 'r') as f:
+        items = [tuple(line.rstrip('\n').split('\t')) for line in f]
+
+    maxraw = max(len(x[0]) for x in items)
+    maxnorm = max(len(x[1]) for x in items)
+
+    raw = numpy.zeros((len(items), maxraw), dtype=numpy.int8)
+    norm = numpy.zeros((len(items), maxnorm), dtype=numpy.int8)
+
+    if voc is None:
+        chars = set(itertools.chain(*(x[0] + x[1] for x in items)))
+        voc = {c: i + 4 for i, c in enumerate(sorted(chars))}
+        voc['empty'] = 0
+        voc['<UNK>'] = 1
+        voc['<S>'] = 1
+        voc['</S>'] = 1
+
+    for i, (r, n) in enumerate(items):
+        raw[i, 0:len(r)] = [voc.get(c, voc['<UNK>']) for c in r]
+        norm[i, 0:len(n)] = [voc.get(c, voc['<UNK>']) for c in n]
+
+    data = collections.OrderedDict()
+    data['raw'] = raw
+    data['norm'] = norm
+    return IndexableDataset(data), voc
+
+
+class WordTransformer(Initializable):
     """The top brick.
 
     It is often convenient to gather all bricks of the model under the
@@ -93,7 +124,7 @@ class WordReverser(Initializable):
     """
 
     def __init__(self, dimension, alphabet_size, **kwargs):
-        super(WordReverser, self).__init__(**kwargs)
+        super(WordTransformer, self).__init__(**kwargs)
         encoder = Bidirectional(
             SimpleRecurrent(dim=dimension, activation=Tanh()))
         fork = Fork([name for name in encoder.prototype.apply.sequences
@@ -144,40 +175,37 @@ class WordReverser(Initializable):
             attended_mask=tensor.ones(chars.shape))
 
 
-def main(mode, save_path, num_batches, data_path=None):
-    reverser = WordReverser(100, len(char2code), name="reverser")
+def main(mode, save_path, num_batches):
+    dataset, voc = load_historical('train')
+
+    reverse_voc = {idx: word for word, idx in voc.items()}
+
+    transformer = WordTransformer(100, len(voc), name="transformer")
 
     if mode == "train":
         # Data processing pipeline
-        dataset_options = dict(dictionary=char2code, level="character",
-                               preprocess=_lower)
-        if data_path:
-            dataset = TextFile(data_path, **dataset_options)
-        else:
-            dataset = OneBillionWord("training", [99], **dataset_options)
+
         data_stream = dataset.get_example_stream()
         data_stream = Filter(data_stream, _filter_long)
-        data_stream = Mapping(data_stream, reverse_words,
-                              add_sources=("targets",))
         data_stream = Batch(data_stream, iteration_scheme=ConstantScheme(10))
         data_stream = Padding(data_stream)
         data_stream = Mapping(data_stream, _transpose)
 
         # Initialization settings
-        reverser.weights_init = IsotropicGaussian(0.1)
-        reverser.biases_init = Constant(0.0)
-        reverser.push_initialization_config()
-        reverser.encoder.weights_init = Orthogonal()
-        reverser.generator.transition.weights_init = Orthogonal()
+        transformer.weights_init = IsotropicGaussian(0.1)
+        transformer.biases_init = Constant(0.0)
+        transformer.push_initialization_config()
+        transformer.encoder.weights_init = Orthogonal()
+        transformer.generator.transition.weights_init = Orthogonal()
 
         # Build the cost computation graph
-        chars = tensor.lmatrix("features")
-        chars_mask = tensor.matrix("features_mask")
-        targets = tensor.lmatrix("targets")
-        targets_mask = tensor.matrix("targets_mask")
-        batch_cost = reverser.cost(
-            chars, chars_mask, targets, targets_mask).sum()
-        batch_size = chars.shape[1].copy(name="batch_size")
+        raw = tensor.lmatrix("raw")
+        raw_norm = tensor.matrix("raw_mask")
+        norm = tensor.lmatrix("norm")
+        norm_mask = tensor.matrix("norm_mask")
+        batch_cost = transformer.cost(
+            raw, raw_norm, norm, norm_mask).sum()
+        batch_size = raw.shape[1].copy(name="batch_size")
         cost = aggregation.mean(batch_cost, batch_size)
         cost.name = "sequence_log_likelihood"
         logger.info("Cost graph is built")
@@ -202,14 +230,14 @@ def main(mode, save_path, num_batches, data_path=None):
             step_rule=CompositeRule([StepClipping(10.0), Scale(0.01)]))
 
         # Fetch variables useful for debugging
-        generator = reverser.generator
+        generator = transformer.generator
         (energies,) = VariableFilter(
             applications=[generator.readout.readout],
             name_regex="output")(cg.variables)
         (activations,) = VariableFilter(
             applications=[generator.transition.apply],
             name=generator.transition.apply.states[0])(cg.variables)
-        max_length = chars.shape[0].copy(name="max_length")
+        max_length = raw.shape[0].copy(name="max_length")
         cost_per_character = aggregation.mean(
             batch_cost, batch_size * max_length).copy(
             name="character_log_likelihood")
@@ -249,8 +277,8 @@ def main(mode, save_path, num_batches, data_path=None):
                 Printing(every_n_batches=1)])
         main_loop.run()
     elif mode == "sample" or mode == "beam_search":
-        chars = tensor.lmatrix("input")
-        generated = reverser.generate(chars)
+        raw = tensor.lmatrix("input")
+        generated = transformer.generate(raw)
         model = Model(generated)
         logger.info("Loading the model..")
         with open(save_path, 'rb') as f:
@@ -273,7 +301,7 @@ def main(mode, save_path, num_batches, data_path=None):
             """
             if mode == "beam_search":
                 samples, = VariableFilter(
-                    applications=[reverser.generator.generate], name="outputs")(
+                    applications=[transformer.generator.generate], name="outputs")(
                     ComputationGraph(generated[1]))
                 # NOTE: this will recompile beam search functions
                 # every time user presses Enter. Do not create
@@ -281,7 +309,7 @@ def main(mode, save_path, num_batches, data_path=None):
                 # speed is important for you.
                 beam_search = BeamSearch(samples)
                 outputs, costs = beam_search.search(
-                    {chars: input_}, char2code['</S>'],
+                    {raw: input_}, voc['</S>'],
                     3 * input_.shape[0])
             else:
                 _1, outputs, _2, _3, costs = (
@@ -291,43 +319,39 @@ def main(mode, save_path, num_batches, data_path=None):
                 for i in range(len(outputs)):
                     outputs[i] = list(outputs[i])
                     try:
-                        true_length = outputs[i].index(char2code['</S>']) + 1
+                        true_length = outputs[i].index(voc['</S>']) + 1
                     except ValueError:
                         true_length = len(outputs[i])
                     outputs[i] = outputs[i][:true_length]
                     costs[i] = costs[i][:true_length].sum()
             return outputs, costs
 
-        while True:
-            try:
-                line = input("Enter a sentence\n")
-                message = ("Enter the number of samples\n" if mode == "sample"
-                           else "Enter the beam size\n")
-                batch_size = int(input(message))
-            except EOFError:
-                break
-            except Exception:
-                traceback.print_exc()
-                continue
+        batch_size = 100
+        with open('data/german.de-hs.dev.hsde', 'r') as f:
+            for fline in f:
+                line, target = tuple(fline.rstrip('\n').split('\t'))
 
-            encoded_input = [char2code.get(char, char2code["<UNK>"])
-                             for char in line.lower().strip()]
-            encoded_input = ([char2code['<S>']] + encoded_input +
-                             [char2code['</S>']])
-            print("Encoder input:", encoded_input)
-            target = reverse_words((encoded_input,))[0]
-            print("Target: ", target)
+                encoded_input = [voc.get(char, voc["<UNK>"])
+                                 for char in line.lower().strip()]
+                encoded_input = ([voc['<S>']] + encoded_input +
+                                 [voc['</S>']])
+                print("Encoder input:", encoded_input)
+                print("Target: ", target)
 
-            samples, costs = generate(
-                numpy.repeat(numpy.array(encoded_input)[:, None],
-                             batch_size, axis=1))
-            messages = []
-            for sample, cost in equizip(samples, costs):
-                message = "({})".format(cost)
-                message += "".join(code2char[code] for code in sample)
-                if sample == target:
-                    message += " CORRECT!"
-                messages.append((cost, message))
-            messages.sort(key=operator.itemgetter(0), reverse=True)
-            for _, message in messages:
-                print(message)
+                samples, costs = generate(
+                    numpy.repeat(numpy.array(encoded_input)[:, None],
+                                 batch_size, axis=1))
+                messages = []
+                for sample, cost in equizip(samples, costs):
+                    message = "({})".format(cost)
+                    message += "".join(reverse_voc[code] for code in sample)
+                    if sample == target:
+                        message += " CORRECT!"
+                    messages.append((cost, message))
+                messages.sort(key=operator.itemgetter(0), reverse=True)
+                for _, message in messages:
+                    print(message)
+
+
+if __name__ == '__main__':
+    main('train', 'trained-model.tar', 10000)
