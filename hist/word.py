@@ -90,9 +90,6 @@ def load_historical(part, voc=None):
     with open(infile, 'r') as f:
         items = [tuple(line.rstrip('\n').split('\t')) for line in f]
 
-    maxraw = max(len(x[0]) for x in items)
-    maxnorm = max(len(x[1]) for x in items)
-
     if voc is None:
         chars = set(itertools.chain(*(x[0] + x[1] for x in items)))
         voc = {c: i + 3 for i, c in enumerate(sorted(chars))}
