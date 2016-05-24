@@ -1,5 +1,6 @@
 # From blocks-examples/reverse_words
 
+import argparse
 import logging
 import pprint
 import itertools
@@ -16,7 +17,7 @@ from theano import tensor
 from blocks.bricks import Tanh, Initializable
 from blocks.bricks.base import application
 from blocks.bricks.lookup import LookupTable
-from blocks.bricks.recurrent import SimpleRecurrent, Bidirectional
+from blocks.bricks.recurrent import SimpleRecurrent, Bidirectional, LSTM, GatedRecurrent
 from blocks.bricks.attention import SequenceContentAttention
 from blocks.bricks.parallel import Fork
 from blocks.bricks.sequence_generators import (
@@ -120,18 +121,20 @@ class WordTransformer(Initializable):
 
     """
 
-    def __init__(self, dimension, alphabet_size, **kwargs):
+    def __init__(self, dimension, alphabet_size, recurrent_type='rnn', **kwargs):
         super(WordTransformer, self).__init__(**kwargs)
+
+        typedict = {'rnn': SimpleRecurrent, 'lstm': LSTM, 'gru': GatedRecurrent}
+        recurrent_unit = typedict[recurrent_type]
+
         encoder = Bidirectional(
-            SimpleRecurrent(dim=dimension, activation=Tanh()))
+            recurrent_unit(dim=dimension))
         fork = Fork([name for name in encoder.prototype.apply.sequences
                      if name != 'mask'])
         fork.input_dim = dimension
         fork.output_dims = [encoder.prototype.get_dim(name) for name in fork.input_names]
         lookup = LookupTable(alphabet_size, dimension)
-        transition = SimpleRecurrent(
-            activation=Tanh(),
-            dim=dimension, name="transition")
+        transition = recurrent_unit(dim=dimension, name="transition")
         attention = SequenceContentAttention(
             state_names=transition.apply.states,
             attended_dim=2 * dimension, match_dim=dimension, name="attention")
@@ -351,23 +354,39 @@ def predict(transformer, mode, save_path, voc):
 
 
 def main():
-    if len(sys.argv) != 4:
-        print('Usage: %s mode model traincorpus' % sys.argv[0], file=sys.stderr)
-        sys.exit(1)
+    parser = argparse.ArgumentParser(
+        "Historical text normaliser",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument(
+        "mode", choices=["train", "sample", "beam_search"],
+        help="The mode to run. In the `train` mode a model is trained."
+             " In the `sample` and `beam_search` modes a trained model is "
+             " to used reverse words in the input text.")
+    parser.add_argument(
+        "model",
+        help="The path to save the training process if the mode"
+             " is `train` OR path to an `.tar` files with learned"
+             " parameters if the mode is `test`.")
+    parser.add_argument(
+        "traincorpus",
+        help="the training corpus (required for both training and prediction)")
+    parser.add_argument(
+        "--num-batches", default=10000, type=int,
+        help="Train on this many batches.")
+    parser.add_argument(
+        "--recurrent-type", choices=["rnn", "gru", "lstm"], default="rnn",
+        help="The type of recurrent unit to use")
+    args = parser.parse_args()
 
-    mode = sys.argv[1]
-    model = sys.argv[2]
-    corpus = sys.argv[3]
+    dataset, voc = load_historical(args.traincorpus)
 
-    dataset, voc = load_historical(corpus)
+    transformer = WordTransformer(100, len(voc), name="transformer", recurrent_type=args.recurrent_type)
 
-    transformer = WordTransformer(100, len(voc), name="transformer")
-
-    if mode == "train":
+    if args.mode == "train":
         num_batches = 10000
-        train(transformer, dataset, num_batches, model)
-    elif mode == "sample" or mode == "beam_search":
-        predict(transformer, mode, model, voc)
+        train(transformer, dataset, num_batches, args.model)
+    elif args.mode == "sample" or args.mode == "beam_search":
+        predict(transformer, args.mode, args.model, voc)
 
 
 if __name__ == '__main__':
