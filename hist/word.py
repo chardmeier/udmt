@@ -340,7 +340,7 @@ def main(mode, save_path, corpus, num_batches):
                     numpy.repeat(numpy.array(encoded_input)[:, None],
                                  batch_size, axis=1))
 
-                best = max(zip(costs, samples))
+                best = min(zip(costs, samples))
                 pred = ''.join(reverse_voc[code] for code in best[1] if code not in {voc['<S>'], voc['</S>']})
 
                 print('%s\t%s\t%s' % (line, target, pred))
