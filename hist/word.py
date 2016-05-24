@@ -324,7 +324,7 @@ def predict(transformer, mode, save_path, voc):
             line, target = tuple(fline.rstrip('\n').split('\t'))
 
             encoded_input = [voc.get(char, voc["<UNK>"])
-                             for char in line.lower().strip()]
+                             for char in line.strip()]
             encoded_input = ([voc['<S>']] + encoded_input +
                              [voc['</S>']])
             # print("Encoder input:", encoded_input)
