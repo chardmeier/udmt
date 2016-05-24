@@ -333,22 +333,28 @@ def main(mode, save_path, corpus, num_batches):
                                  for char in line.lower().strip()]
                 encoded_input = ([voc['<S>']] + encoded_input +
                                  [voc['</S>']])
-                print("Encoder input:", encoded_input)
-                print("Target: ", target)
+                # print("Encoder input:", encoded_input)
+                # print("Target: ", target)
 
                 samples, costs = generate(
                     numpy.repeat(numpy.array(encoded_input)[:, None],
                                  batch_size, axis=1))
-                messages = []
-                for sample, cost in equizip(samples, costs):
-                    message = "({})".format(cost)
-                    message += "".join(reverse_voc[code] for code in sample)
-                    if sample == target:
-                        message += " CORRECT!"
-                    messages.append((cost, message))
-                messages.sort(key=operator.itemgetter(0), reverse=True)
-                for _, message in messages:
-                    print(message)
+
+                best = max(zip(costs, samples))
+                pred = ''.join(reverse_voc[code] for code in best[1] if code not in {voc['<S>'], voc['</S>']})
+
+                print('%s\t%s\t%s' % (line, target, pred))
+
+                # messages = []
+                # for sample, cost in equizip(samples, costs):
+                #     message = "({})".format(cost)
+                #     message += "".join(reverse_voc[code] for code in sample)
+                #     if sample == target:
+                #         message += " CORRECT!"
+                #     messages.append((cost, message))
+                # messages.sort(key=operator.itemgetter(0), reverse=True)
+                # for _, message in messages:
+                #     print(message)
 
 
 if __name__ == '__main__':
