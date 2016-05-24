@@ -279,6 +279,11 @@ def predict(transformer, mode, save_path, voc):
     with open(save_path, 'rb') as f:
         model.set_parameter_values(load_parameters(f))
 
+    sample_expr, = VariableFilter(
+        applications=[transformer.generator.generate], name="outputs")(
+        ComputationGraph(generated[1]))
+    beam_search = BeamSearch(sample_expr)
+
     def generate(input_):
         """Generate output sequences for an input sequence.
 
@@ -295,14 +300,6 @@ def predict(transformer, mode, save_path, voc):
 
         """
         if mode == "beam_search":
-            samples, = VariableFilter(
-                applications=[transformer.generator.generate], name="outputs")(
-                ComputationGraph(generated[1]))
-            # NOTE: this will recompile beam search functions
-            # every time user presses Enter. Do not create
-            # a new `BeamSearch` object every time if
-            # speed is important for you.
-            beam_search = BeamSearch(samples)
             outputs, costs = beam_search.search(
                 {raw: input_}, voc['</S>'],
                 3 * input_.shape[0])
