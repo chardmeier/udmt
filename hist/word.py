@@ -258,7 +258,7 @@ def train(transformer, dataset, num_batches, save_path):
         algorithm=algorithm,
         extensions=[
             Timing(),
-            TrainingDataMonitoring(observables, after_batch=True),
+            #TrainingDataMonitoring(observables, after_batch=True),
             average_monitoring,
             FinishAfter(after_n_batches=num_batches)
                 # This shows a way to handle NaN emerging during
