@@ -93,9 +93,6 @@ def load_historical(part, voc=None):
     maxraw = max(len(x[0]) for x in items)
     maxnorm = max(len(x[1]) for x in items)
 
-    raw = numpy.zeros((len(items), maxraw), dtype=numpy.int8)
-    norm = numpy.zeros((len(items), maxnorm), dtype=numpy.int8)
-
     if voc is None:
         chars = set(itertools.chain(*(x[0] + x[1] for x in items)))
         voc = {c: i + 3 for i, c in enumerate(sorted(chars))}
