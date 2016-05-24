@@ -394,8 +394,9 @@ def main():
         "--step-rule", choices=["original", "rmsprop", "rms+mom", "adam", "adagrad"], default="original",
         help="The step rule for the search algorithm")
     parser.add_argument(
-        "--autoencoder", default=False, type=bool,
+        "--autoencoder", dest='autoencoder', action='store_true',
         help="Train an autoencoder instead of a transducer")
+    parser.set_defaults(autoencoder=False)
     args = parser.parse_args()
 
     dataset, voc = load_historical(args.traincorpus, autoencoder=args.autoencoder)
