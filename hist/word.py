@@ -403,7 +403,7 @@ def main():
     transformer = WordTransformer(100, len(voc), name="transformer", recurrent_type=args.recurrent_type)
 
     if args.mode == "train":
-        num_batches = 10000
+        num_batches = args.num_batches
         train(transformer, dataset, num_batches, args.model, step_rule=args.step_rule)
     elif args.mode == "sample" or args.mode == "beam_search":
         predict(transformer, args.mode, args.model, voc)
