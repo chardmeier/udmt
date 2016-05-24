@@ -325,7 +325,7 @@ def main(mode, save_path, corpus, num_batches):
             return outputs, costs
 
         batch_size = 100
-        with open('data/german.de-hs.dev.hsde', 'r') as f:
+        with open('data/german.de-hs.dev.hsde.uniq', 'r') as f:
             for fline in f:
                 line, target = tuple(fline.rstrip('\n').split('\t'))
 
