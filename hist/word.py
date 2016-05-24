@@ -29,7 +29,7 @@ from fuel.datasets import IndexableDataset
 from fuel.schemes import ConstantScheme, ShuffledScheme
 from blocks.serialization import load_parameters
 from blocks.algorithms import (GradientDescent, Scale,
-                               StepClipping, CompositeRule)
+                               StepClipping, CompositeRule, RMSProp, Adam, Momentum, AdaGrad)
 from blocks.initialization import Orthogonal, IsotropicGaussian, Constant
 from blocks.model import Model
 from blocks.monitoring import aggregation
@@ -175,7 +175,7 @@ class WordTransformer(Initializable):
             attended_mask=tensor.ones(chars.shape))
 
 
-def train(transformer, dataset, num_batches, save_path):
+def train(transformer, dataset, num_batches, save_path, step_rule='original'):
     # Data processing pipeline
 
     dataset.example_iteration_scheme = ShuffledScheme(dataset.num_examples, 10)
@@ -217,11 +217,22 @@ def train(transformer, dataset, num_batches, save_path):
     for brick in model.get_top_bricks():
         brick.initialize()
 
+    if step_rule == 'original':
+        step_rule_obj = CompositeRule([StepClipping(10.0), Scale(0.01)])
+    elif step_rule == 'rmsprop':
+        step_rule_obj = RMSProp(learning_rate=.01)
+    elif step_rule == 'rms+mom':
+        step_rule_obj = CompositeRule([RMSProp(learning_rate=0.01), Momentum(0.9)])
+    elif step_rule == 'adam':
+        step_rule_obj = Adam()
+    elif step_rule == 'adagrad':
+        step_rule_obj = AdaGrad()
+    else:
+        raise ValueError('Unknow step rule: ' + step_rule)
+
     # Define the training algorithm.
     cg = ComputationGraph(cost)
-    algorithm = GradientDescent(
-        cost=cost, parameters=cg.parameters,
-        step_rule=CompositeRule([StepClipping(10.0), Scale(0.01)]))
+    algorithm = GradientDescent(cost=cost, parameters=cg.parameters, step_rule=step_rule_obj)
 
     # Fetch variables useful for debugging
     generator = transformer.generator
@@ -376,6 +387,9 @@ def main():
     parser.add_argument(
         "--recurrent-type", choices=["rnn", "gru", "lstm"], default="rnn",
         help="The type of recurrent unit to use")
+    parser.add_argument(
+        "--step-rule", choices=["original", "rmsprop", "rms+mom", "adam", "adagrad"], default="original",
+        help="The step rule for the search algorithm")
     args = parser.parse_args()
 
     dataset, voc = load_historical(args.traincorpus)
@@ -384,7 +398,7 @@ def main():
 
     if args.mode == "train":
         num_batches = 10000
-        train(transformer, dataset, num_batches, args.model)
+        train(transformer, dataset, num_batches, args.model, step_rule=args.step_rule)
     elif args.mode == "sample" or args.mode == "beam_search":
         predict(transformer, args.mode, args.model, voc)
 
