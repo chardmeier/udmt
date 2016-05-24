@@ -319,41 +319,40 @@ def predict(transformer, mode, save_path, voc):
         return outputs, costs
 
     batch_size = 100
-    with open('data/german.de-hs.dev.hsde.uniq', 'r') as f:
-        for fline in f:
-            line, target = tuple(fline.rstrip('\n').split('\t'))
+    for fline in sys.stdin:
+        line, target = tuple(fline.rstrip('\n').split('\t'))
 
-            encoded_input = [voc.get(char, voc["<UNK>"])
-                             for char in line.strip()]
-            encoded_input = ([voc['<S>']] + encoded_input +
-                             [voc['</S>']])
-            # print("Encoder input:", encoded_input)
-            # print("Target: ", target)
+        encoded_input = [voc.get(char, voc["<UNK>"])
+                         for char in line.strip()]
+        encoded_input = ([voc['<S>']] + encoded_input +
+                         [voc['</S>']])
+        # print("Encoder input:", encoded_input)
+        # print("Target: ", target)
 
-            samples, costs = generate(
-                numpy.repeat(numpy.array(encoded_input)[:, None],
-                             batch_size, axis=1))
+        samples, costs = generate(
+            numpy.repeat(numpy.array(encoded_input)[:, None],
+                         batch_size, axis=1))
 
-            best = min(zip(costs, samples))
-            pred = ''.join(reverse_voc[code] for code in best[1] if code not in {voc['<S>'], voc['</S>']})
+        best = min(zip(costs, samples))
+        pred = ''.join(reverse_voc[code] for code in best[1] if code not in {voc['<S>'], voc['</S>']})
 
-            print('%s\t%s\t%s' % (line, target, pred))
+        print('%s\t%s\t%s' % (line, target, pred))
 
-            # messages = []
-            # for sample, cost in equizip(samples, costs):
-            #     message = "({})".format(cost)
-            #     message += "".join(reverse_voc[code] for code in sample)
-            #     if sample == target:
-            #         message += " CORRECT!"
-            #     messages.append((cost, message))
-            # messages.sort(key=operator.itemgetter(0), reverse=True)
-            # for _, message in messages:
-            #     print(message)
+        # messages = []
+        # for sample, cost in equizip(samples, costs):
+        #     message = "({})".format(cost)
+        #     message += "".join(reverse_voc[code] for code in sample)
+        #     if sample == target:
+        #         message += " CORRECT!"
+        #     messages.append((cost, message))
+        # messages.sort(key=operator.itemgetter(0), reverse=True)
+        # for _, message in messages:
+        #     print(message)
 
 
 def main():
     if len(sys.argv) != 4:
-        print('Usage: %s mode model corpus' % sys.argv[0], file=sys.stderr)
+        print('Usage: %s mode model traincorpus' % sys.argv[0], file=sys.stderr)
         sys.exit(1)
 
     mode = sys.argv[1]
