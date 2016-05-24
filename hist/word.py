@@ -172,192 +172,189 @@ class WordTransformer(Initializable):
             attended_mask=tensor.ones(chars.shape))
 
 
-def main(mode, save_path, corpus, num_batches):
-    dataset, voc = load_historical(corpus)
+def train(transformer, dataset, num_batches, save_path):
+    # Data processing pipeline
 
+    dataset.example_iteration_scheme = ShuffledScheme(dataset.num_examples, 10)
+    data_stream = dataset.get_example_stream()
+    data_stream = Filter(data_stream, _filter_long)
+    # data_stream = Batch(data_stream, iteration_scheme=ConstantScheme(10))
+    data_stream = Padding(data_stream)
+    data_stream = Mapping(data_stream, _transpose)
+
+    # Initialization settings
+    transformer.weights_init = IsotropicGaussian(0.1)
+    transformer.biases_init = Constant(0.0)
+    transformer.push_initialization_config()
+    transformer.encoder.weights_init = Orthogonal()
+    transformer.generator.transition.weights_init = Orthogonal()
+
+    # Build the cost computation graph
+    raw = tensor.lmatrix("raw")
+    raw_norm = tensor.matrix("raw_mask")
+    norm = tensor.lmatrix("norm")
+    norm_mask = tensor.matrix("norm_mask")
+    batch_cost = transformer.cost(
+        raw, raw_norm, norm, norm_mask).sum()
+    batch_size = raw.shape[1].copy(name="batch_size")
+    cost = aggregation.mean(batch_cost, batch_size)
+    cost.name = "sequence_log_likelihood"
+    logger.info("Cost graph is built")
+
+    # Give an idea of what's going on
+    model = Model(cost)
+    parameters = model.get_parameter_dict()
+    logger.info("Parameters:\n" +
+                pprint.pformat(
+                    [(key, value.get_value().shape) for key, value
+                     in parameters.items()],
+                    width=120))
+
+    # Initialize parameters
+    for brick in model.get_top_bricks():
+        brick.initialize()
+
+    # Define the training algorithm.
+    cg = ComputationGraph(cost)
+    algorithm = GradientDescent(
+        cost=cost, parameters=cg.parameters,
+        step_rule=CompositeRule([StepClipping(10.0), Scale(0.01)]))
+
+    # Fetch variables useful for debugging
+    generator = transformer.generator
+    (energies,) = VariableFilter(
+        applications=[generator.readout.readout],
+        name_regex="output")(cg.variables)
+    (activations,) = VariableFilter(
+        applications=[generator.transition.apply],
+        name=generator.transition.apply.states[0])(cg.variables)
+    max_length = raw.shape[0].copy(name="max_length")
+    cost_per_character = aggregation.mean(
+        batch_cost, batch_size * max_length).copy(
+        name="character_log_likelihood")
+    min_energy = energies.min().copy(name="min_energy")
+    max_energy = energies.max().copy(name="max_energy")
+    mean_activation = abs(activations).mean().copy(
+        name="mean_activation")
+    observables = [
+        cost, min_energy, max_energy, mean_activation,
+        batch_size, max_length, cost_per_character,
+        algorithm.total_step_norm, algorithm.total_gradient_norm]
+    for name, parameter in parameters.items():
+        observables.append(parameter.norm(2).copy(name + "_norm"))
+        observables.append(algorithm.gradients[parameter].norm(2).copy(
+            name + "_grad_norm"))
+
+    # Construct the main loop and start training!
+    average_monitoring = TrainingDataMonitoring(
+        observables, prefix="average", every_n_batches=10)
+
+    main_loop = MainLoop(
+        model=model,
+        data_stream=data_stream,
+        algorithm=algorithm,
+        extensions=[
+            Timing(),
+            TrainingDataMonitoring(observables, after_batch=True),
+            average_monitoring,
+            FinishAfter(after_n_batches=num_batches)
+                # This shows a way to handle NaN emerging during
+                # training: simply finish it.
+                .add_condition(["after_batch"], _is_nan),
+            # Saving the model and the log separately is convenient,
+            # because loading the whole pickle takes quite some time.
+            Checkpoint(save_path, every_n_batches=500,
+                       save_separately=["model", "log"]),
+            Printing(every_n_batches=1)])
+    main_loop.run()
+
+
+def predict(transformer, mode, save_path, voc):
     reverse_voc = {idx: word for word, idx in voc.items()}
 
-    transformer = WordTransformer(100, len(voc), name="transformer")
+    raw = tensor.lmatrix("input")
+    generated = transformer.generate(raw)
+    model = Model(generated)
+    logger.info("Loading the model..")
+    with open(save_path, 'rb') as f:
+        model.set_parameter_values(load_parameters(f))
 
-    if mode == "train":
-        # Data processing pipeline
+    def generate(input_):
+        """Generate output sequences for an input sequence.
 
-        dataset.example_iteration_scheme = ShuffledScheme(dataset.num_examples, 10)
-        data_stream = dataset.get_example_stream()
-        data_stream = Filter(data_stream, _filter_long)
-        # data_stream = Batch(data_stream, iteration_scheme=ConstantScheme(10))
-        data_stream = Padding(data_stream)
-        data_stream = Mapping(data_stream, _transpose)
+        Incapsulates most of the difference between sampling and beam
+        search.
 
-        # Initialization settings
-        transformer.weights_init = IsotropicGaussian(0.1)
-        transformer.biases_init = Constant(0.0)
-        transformer.push_initialization_config()
-        transformer.encoder.weights_init = Orthogonal()
-        transformer.generator.transition.weights_init = Orthogonal()
+        Returns
+        -------
+        outputs : list of lists
+            Trimmed output sequences.
+        costs : list
+            The negative log-likelihood of generating the respective
+            sequences.
 
-        # Build the cost computation graph
-        raw = tensor.lmatrix("raw")
-        raw_norm = tensor.matrix("raw_mask")
-        norm = tensor.lmatrix("norm")
-        norm_mask = tensor.matrix("norm_mask")
-        batch_cost = transformer.cost(
-            raw, raw_norm, norm, norm_mask).sum()
-        batch_size = raw.shape[1].copy(name="batch_size")
-        cost = aggregation.mean(batch_cost, batch_size)
-        cost.name = "sequence_log_likelihood"
-        logger.info("Cost graph is built")
+        """
+        if mode == "beam_search":
+            samples, = VariableFilter(
+                applications=[transformer.generator.generate], name="outputs")(
+                ComputationGraph(generated[1]))
+            # NOTE: this will recompile beam search functions
+            # every time user presses Enter. Do not create
+            # a new `BeamSearch` object every time if
+            # speed is important for you.
+            beam_search = BeamSearch(samples)
+            outputs, costs = beam_search.search(
+                {raw: input_}, voc['</S>'],
+                3 * input_.shape[0])
+        else:
+            _1, outputs, _2, _3, costs = (
+                model.get_theano_function()(input_))
+            outputs = list(outputs.T)
+            costs = list(costs.T)
+            for i in range(len(outputs)):
+                outputs[i] = list(outputs[i])
+                try:
+                    true_length = outputs[i].index(voc['</S>']) + 1
+                except ValueError:
+                    true_length = len(outputs[i])
+                outputs[i] = outputs[i][:true_length]
+                costs[i] = costs[i][:true_length].sum()
+        return outputs, costs
 
-        # Give an idea of what's going on
-        model = Model(cost)
-        parameters = model.get_parameter_dict()
-        logger.info("Parameters:\n" +
-                    pprint.pformat(
-                        [(key, value.get_value().shape) for key, value
-                         in parameters.items()],
-                        width=120))
+    batch_size = 100
+    with open('data/german.de-hs.dev.hsde.uniq', 'r') as f:
+        for fline in f:
+            line, target = tuple(fline.rstrip('\n').split('\t'))
 
-        # Initialize parameters
-        for brick in model.get_top_bricks():
-            brick.initialize()
+            encoded_input = [voc.get(char, voc["<UNK>"])
+                             for char in line.lower().strip()]
+            encoded_input = ([voc['<S>']] + encoded_input +
+                             [voc['</S>']])
+            # print("Encoder input:", encoded_input)
+            # print("Target: ", target)
 
-        # Define the training algorithm.
-        cg = ComputationGraph(cost)
-        algorithm = GradientDescent(
-            cost=cost, parameters=cg.parameters,
-            step_rule=CompositeRule([StepClipping(10.0), Scale(0.01)]))
+            samples, costs = generate(
+                numpy.repeat(numpy.array(encoded_input)[:, None],
+                             batch_size, axis=1))
 
-        # Fetch variables useful for debugging
-        generator = transformer.generator
-        (energies,) = VariableFilter(
-            applications=[generator.readout.readout],
-            name_regex="output")(cg.variables)
-        (activations,) = VariableFilter(
-            applications=[generator.transition.apply],
-            name=generator.transition.apply.states[0])(cg.variables)
-        max_length = raw.shape[0].copy(name="max_length")
-        cost_per_character = aggregation.mean(
-            batch_cost, batch_size * max_length).copy(
-            name="character_log_likelihood")
-        min_energy = energies.min().copy(name="min_energy")
-        max_energy = energies.max().copy(name="max_energy")
-        mean_activation = abs(activations).mean().copy(
-            name="mean_activation")
-        observables = [
-            cost, min_energy, max_energy, mean_activation,
-            batch_size, max_length, cost_per_character,
-            algorithm.total_step_norm, algorithm.total_gradient_norm]
-        for name, parameter in parameters.items():
-            observables.append(parameter.norm(2).copy(name + "_norm"))
-            observables.append(algorithm.gradients[parameter].norm(2).copy(
-                name + "_grad_norm"))
+            best = min(zip(costs, samples))
+            pred = ''.join(reverse_voc[code] for code in best[1] if code not in {voc['<S>'], voc['</S>']})
 
-        # Construct the main loop and start training!
-        average_monitoring = TrainingDataMonitoring(
-            observables, prefix="average", every_n_batches=10)
+            print('%s\t%s\t%s' % (line, target, pred))
 
-        main_loop = MainLoop(
-            model=model,
-            data_stream=data_stream,
-            algorithm=algorithm,
-            extensions=[
-                Timing(),
-                TrainingDataMonitoring(observables, after_batch=True),
-                average_monitoring,
-                FinishAfter(after_n_batches=num_batches)
-                    # This shows a way to handle NaN emerging during
-                    # training: simply finish it.
-                    .add_condition(["after_batch"], _is_nan),
-                # Saving the model and the log separately is convenient,
-                # because loading the whole pickle takes quite some time.
-                Checkpoint(save_path, every_n_batches=500,
-                           save_separately=["model", "log"]),
-                Printing(every_n_batches=1)])
-        main_loop.run()
-    elif mode == "sample" or mode == "beam_search":
-        raw = tensor.lmatrix("input")
-        generated = transformer.generate(raw)
-        model = Model(generated)
-        logger.info("Loading the model..")
-        with open(save_path, 'rb') as f:
-            model.set_parameter_values(load_parameters(f))
-
-        def generate(input_):
-            """Generate output sequences for an input sequence.
-
-            Incapsulates most of the difference between sampling and beam
-            search.
-
-            Returns
-            -------
-            outputs : list of lists
-                Trimmed output sequences.
-            costs : list
-                The negative log-likelihood of generating the respective
-                sequences.
-
-            """
-            if mode == "beam_search":
-                samples, = VariableFilter(
-                    applications=[transformer.generator.generate], name="outputs")(
-                    ComputationGraph(generated[1]))
-                # NOTE: this will recompile beam search functions
-                # every time user presses Enter. Do not create
-                # a new `BeamSearch` object every time if
-                # speed is important for you.
-                beam_search = BeamSearch(samples)
-                outputs, costs = beam_search.search(
-                    {raw: input_}, voc['</S>'],
-                    3 * input_.shape[0])
-            else:
-                _1, outputs, _2, _3, costs = (
-                    model.get_theano_function()(input_))
-                outputs = list(outputs.T)
-                costs = list(costs.T)
-                for i in range(len(outputs)):
-                    outputs[i] = list(outputs[i])
-                    try:
-                        true_length = outputs[i].index(voc['</S>']) + 1
-                    except ValueError:
-                        true_length = len(outputs[i])
-                    outputs[i] = outputs[i][:true_length]
-                    costs[i] = costs[i][:true_length].sum()
-            return outputs, costs
-
-        batch_size = 100
-        with open('data/german.de-hs.dev.hsde.uniq', 'r') as f:
-            for fline in f:
-                line, target = tuple(fline.rstrip('\n').split('\t'))
-
-                encoded_input = [voc.get(char, voc["<UNK>"])
-                                 for char in line.lower().strip()]
-                encoded_input = ([voc['<S>']] + encoded_input +
-                                 [voc['</S>']])
-                # print("Encoder input:", encoded_input)
-                # print("Target: ", target)
-
-                samples, costs = generate(
-                    numpy.repeat(numpy.array(encoded_input)[:, None],
-                                 batch_size, axis=1))
-
-                best = min(zip(costs, samples))
-                pred = ''.join(reverse_voc[code] for code in best[1] if code not in {voc['<S>'], voc['</S>']})
-
-                print('%s\t%s\t%s' % (line, target, pred))
-
-                # messages = []
-                # for sample, cost in equizip(samples, costs):
-                #     message = "({})".format(cost)
-                #     message += "".join(reverse_voc[code] for code in sample)
-                #     if sample == target:
-                #         message += " CORRECT!"
-                #     messages.append((cost, message))
-                # messages.sort(key=operator.itemgetter(0), reverse=True)
-                # for _, message in messages:
-                #     print(message)
+            # messages = []
+            # for sample, cost in equizip(samples, costs):
+            #     message = "({})".format(cost)
+            #     message += "".join(reverse_voc[code] for code in sample)
+            #     if sample == target:
+            #         message += " CORRECT!"
+            #     messages.append((cost, message))
+            # messages.sort(key=operator.itemgetter(0), reverse=True)
+            # for _, message in messages:
+            #     print(message)
 
 
-if __name__ == '__main__':
+def main():
     if len(sys.argv) != 4:
         print('Usage: %s mode model corpus' % sys.argv[0], file=sys.stderr)
         sys.exit(1)
@@ -366,4 +363,16 @@ if __name__ == '__main__':
     model = sys.argv[2]
     corpus = sys.argv[3]
 
-    main(mode, model, corpus, 10000)
+    dataset, voc = load_historical(corpus)
+
+    transformer = WordTransformer(100, len(voc), name="transformer")
+
+    if mode == "train":
+        num_batches = 10000
+        train(transformer, dataset, num_batches, model)
+    elif mode == "sample" or mode == "beam_search":
+        predict(transformer, mode, model, voc)
+
+
+if __name__ == '__main__':
+    main()
