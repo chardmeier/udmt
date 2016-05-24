@@ -137,7 +137,7 @@ class WordTransformer(Initializable):
         fork.input_dim = dimension
         fork.output_dims = [encoder.prototype.get_dim(name) for name in fork.input_names]
         lookup = LookupTable(alphabet_size, dimension)
-        transition = recurrent_unit(dim=dimension, name="transition")
+        transition = recurrent_unit(activation=Tanh(), dim=dimension, name="transition")
         attention = SequenceContentAttention(
             state_names=transition.apply.states,
             attended_dim=2 * dimension, match_dim=dimension, name="attention")
