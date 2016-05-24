@@ -24,7 +24,7 @@ from blocks.config import config
 from blocks.graph import ComputationGraph
 from fuel.transformers import Mapping, Batch, Padding, Filter
 from fuel.datasets import IndexableDataset
-from fuel.schemes import ShuffledScheme
+from fuel.schemes import ConstantScheme, ShuffledScheme
 from blocks.serialization import load_parameters
 from blocks.algorithms import (GradientDescent, Scale,
                                StepClipping, CompositeRule)
@@ -182,9 +182,10 @@ def main(mode, save_path, num_batches):
     if mode == "train":
         # Data processing pipeline
 
+        dataset.example_iteration_scheme = ShuffledScheme(dataset.num_examples, 10)
         data_stream = dataset.get_example_stream()
         data_stream = Filter(data_stream, _filter_long)
-        data_stream = Batch(data_stream, iteration_scheme=ShuffledScheme(dataset.num_examples, 10))
+        # data_stream = Batch(data_stream, iteration_scheme=ConstantScheme(10))
         data_stream = Padding(data_stream)
         data_stream = Mapping(data_stream, _transpose)
 
