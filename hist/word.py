@@ -7,6 +7,7 @@ import collections
 import math
 import numpy
 import operator
+import sys
 
 import theano
 from picklable_itertools.extras import equizip
@@ -85,8 +86,7 @@ def _is_nan(log):
     return math.isnan(log.current_row['total_gradient_norm'])
 
 
-def load_historical(part, voc=None):
-    infile = 'data/german.de-hs.%s.hsde' % part
+def load_historical(infile, voc=None):
     with open(infile, 'r') as f:
         items = [tuple(line.rstrip('\n').split('\t')) for line in f]
 
@@ -172,8 +172,8 @@ class WordTransformer(Initializable):
             attended_mask=tensor.ones(chars.shape))
 
 
-def main(mode, save_path, num_batches):
-    dataset, voc = load_historical('train')
+def main(mode, save_path, corpus, num_batches):
+    dataset, voc = load_historical(corpus)
 
     reverse_voc = {idx: word for word, idx in voc.items()}
 
@@ -352,4 +352,12 @@ def main(mode, save_path, num_batches):
 
 
 if __name__ == '__main__':
-    main('train', 'trained-model.tar', 10000)
+    if len(sys.argv) != 4:
+        print('Usage: %s mode model corpus' % sys.argv[0], file=sys.stderr)
+        sys.exit(1)
+
+    mode = sys.argv[1]
+    model = sys.argv[2]
+    corpus = sys.argv[3]
+
+    main(mode, model, corpus, 10000)
