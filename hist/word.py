@@ -318,7 +318,7 @@ def predict(transformer, mode, save_path, voc):
                 costs[i] = costs[i][:true_length].sum()
         return outputs, costs
 
-    batch_size = 100
+    batch_size = 50
     for fline in sys.stdin:
         line, target = tuple(fline.rstrip('\n').split('\t'))
 
