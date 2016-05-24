@@ -6,7 +6,6 @@ import itertools
 import collections
 import math
 import numpy
-import traceback
 import operator
 
 import theano
@@ -24,8 +23,8 @@ from blocks.bricks.sequence_generators import (
 from blocks.config import config
 from blocks.graph import ComputationGraph
 from fuel.transformers import Mapping, Batch, Padding, Filter
-from fuel.datasets import IndexableDataset, OneBillionWord, TextFile
-from fuel.schemes import ConstantScheme
+from fuel.datasets import IndexableDataset
+from fuel.schemes import ShuffledScheme
 from blocks.serialization import load_parameters
 from blocks.algorithms import (GradientDescent, Scale,
                                StepClipping, CompositeRule)
@@ -99,15 +98,19 @@ def load_historical(part, voc=None):
 
     if voc is None:
         chars = set(itertools.chain(*(x[0] + x[1] for x in items)))
-        voc = {c: i + 4 for i, c in enumerate(sorted(chars))}
-        voc['empty'] = 0
-        voc['<UNK>'] = 1
+        voc = {c: i + 3 for i, c in enumerate(sorted(chars))}
+        voc['<UNK>'] = 0
         voc['<S>'] = 1
-        voc['</S>'] = 1
+        voc['</S>'] = 2
 
-    for i, (r, n) in enumerate(items):
-        raw[i, 0:len(r)] = [voc.get(c, voc['<UNK>']) for c in r]
-        norm[i, 0:len(n)] = [voc.get(c, voc['<UNK>']) for c in n]
+    bos = [voc['<S>']]
+    eos = [voc['</S>']]
+
+    raw = []
+    norm = []
+    for r, n in items:
+        raw.append(bos + [voc.get(c, voc['<UNK>']) for c in r] + eos)
+        norm.append(bos + [voc.get(c, voc['<UNK>']) for c in n] + eos)
 
     data = collections.OrderedDict()
     data['raw'] = raw
@@ -187,7 +190,7 @@ def main(mode, save_path, num_batches):
 
         data_stream = dataset.get_example_stream()
         data_stream = Filter(data_stream, _filter_long)
-        data_stream = Batch(data_stream, iteration_scheme=ConstantScheme(10))
+        data_stream = Batch(data_stream, iteration_scheme=ShuffledScheme(dataset.num_examples, 10))
         data_stream = Padding(data_stream)
         data_stream = Mapping(data_stream, _transpose)
 
