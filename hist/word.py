@@ -250,10 +250,11 @@ def train(transformer, dataset, num_batches, save_path, step_rule='original'):
     max_energy = energies.max().copy(name="max_energy")
     mean_activation = abs(activations).mean().copy(
         name="mean_activation")
-    observables = [
-        cost, min_energy, max_energy, mean_activation,
-        batch_size, max_length, cost_per_character,
-        algorithm.total_step_norm, algorithm.total_gradient_norm]
+    # observables = [
+    #     cost, min_energy, max_energy, mean_activation,
+    #     batch_size, max_length, cost_per_character,
+    #     algorithm.total_step_norm, algorithm.total_gradient_norm]
+    observables = [algorithm.total_gradient_norm]
     for name, parameter in parameters.items():
         observables.append(parameter.norm(2).copy(name + "_norm"))
         observables.append(algorithm.gradients[parameter].norm(2).copy(
@@ -269,7 +270,7 @@ def train(transformer, dataset, num_batches, save_path, step_rule='original'):
         algorithm=algorithm,
         extensions=[
             Timing(),
-            #TrainingDataMonitoring(observables, after_batch=True),
+            TrainingDataMonitoring(observables, after_batch=True),
             average_monitoring,
             FinishAfter(after_n_batches=num_batches)
                 # This shows a way to handle NaN emerging during
