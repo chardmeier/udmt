@@ -134,6 +134,10 @@ class Encoder(Initializable):
         self.lookup = lookup
         self.children = [encoder, fork, lookup]
 
+    def _push_initialization_config(self):
+        super()._push_initialization_config()
+        self.encoder.weights_init = Orthogonal()
+
     @application
     def apply(self, chars, chars_mask):
         return self.encoder.apply(
@@ -161,6 +165,11 @@ class Decoder(Initializable):
             name="generator")
 
         self.generator = generator
+        self.children = [generator]
+
+    def _push_initialization_config(self):
+        super()._push_initialization_config()
+        self.generator.transition.weights_init = Orthogonal()
 
     @application
     def cost(self, encoded, encoded_mask, targets, targets_mask):
@@ -196,7 +205,7 @@ class WordTransformer(Initializable):
         else:
             raise ValueError('Invalid recurrent_type: ' + recurrent_type)
 
-        encoder = Encoder(dimension, enc_transition)
+        encoder = Encoder(alphabet_size, dimension, enc_transition)
         decoder = Decoder(dimension, alphabet_size, dec_transition)
 
         self.encoder = encoder
@@ -205,7 +214,7 @@ class WordTransformer(Initializable):
 
     @application
     def cost(self, chars, chars_mask, targets, targets_mask):
-        return self.decoder.cost_matrix(
+        return self.decoder.cost(
             self.encoder.apply(chars, chars_mask), chars_mask,
             targets, targets_mask)
 
@@ -232,8 +241,6 @@ def train(transformer, dataset, num_batches, save_path, step_rule='original'):
     transformer.weights_init = IsotropicGaussian(0.1)
     transformer.biases_init = Constant(0.0)
     transformer.push_initialization_config()
-    transformer.encoder.weights_init = Orthogonal()
-    transformer.generator.transition.weights_init = Orthogonal()
 
     # Build the cost computation graph
     raw = tensor.lmatrix("raw")
@@ -278,7 +285,7 @@ def train(transformer, dataset, num_batches, save_path, step_rule='original'):
     algorithm = GradientDescent(cost=cost, parameters=cg.parameters, step_rule=step_rule_obj)
 
     # Fetch variables useful for debugging
-    generator = transformer.generator
+    generator = transformer.decoder.generator
     (energies,) = VariableFilter(
         applications=[generator.readout.readout],
         name_regex="output")(cg.variables)
