@@ -116,28 +116,36 @@ def load_historical(infile, voc=None, autoencoder=False):
     return IndexableDataset(data), voc
 
 
-class WordTransformer(Initializable):
-    """The top brick.
+class Encoder(Initializable):
+    def __init__(self, alphabet_size, dimension, transition, **kwargs):
+        super(Encoder, self).__init__(**kwargs)
 
-    It is often convenient to gather all bricks of the model under the
-    roof of a single top brick.
+        encoder = Bidirectional(transition)
 
-    """
-
-    def __init__(self, dimension, alphabet_size, recurrent_type='rnn', **kwargs):
-        super(WordTransformer, self).__init__(**kwargs)
-
-        typedict = {'rnn': SimpleRecurrent, 'lstm': LSTM, 'gru': GatedRecurrent}
-        recurrent_unit = typedict[recurrent_type]
-
-        encoder = Bidirectional(
-            recurrent_unit(activation=Tanh(), dim=dimension))
         fork = Fork([name for name in encoder.prototype.apply.sequences
                      if name != 'mask'])
         fork.input_dim = dimension
         fork.output_dims = [encoder.prototype.get_dim(name) for name in fork.input_names]
+
         lookup = LookupTable(alphabet_size, dimension)
-        transition = recurrent_unit(activation=Tanh(), dim=dimension, name="transition")
+
+        self.encoder = encoder
+        self.fork = fork
+        self.lookup = lookup
+        self.children = [encoder, fork, lookup]
+
+    @application
+    def apply(self, chars, chars_mask):
+        return self.encoder.apply(
+            **dict_union(
+                self.fork.apply(self.lookup.apply(chars), as_dict=True),
+                mask=chars_mask))
+
+
+class Decoder(Initializable):
+    def __init__(self, dimension, alphabet_size, transition, **kwargs):
+        super(Decoder, self).__init__(**kwargs)
+
         attention = SequenceContentAttention(
             state_names=transition.apply.states,
             attended_dim=2 * dimension, match_dim=dimension, name="attention")
@@ -152,30 +160,62 @@ class WordTransformer(Initializable):
             readout=readout, transition=transition, attention=attention,
             name="generator")
 
-        self.lookup = lookup
-        self.fork = fork
-        self.encoder = encoder
         self.generator = generator
-        self.children = [lookup, fork, encoder, generator]
+
+    @application
+    def cost(self, encoded, encoded_mask, targets, targets_mask):
+        return self.generator.cost_matrix(targets, targets_mask, attended=encoded, attended_mask=encoded_mask)
+
+    @application
+    def generate(self, encoded, encoded_mask, n_steps, batch_size):
+        return self.decoder.generate(
+            n_steps=n_steps, batch_size=batch_size,
+            attended=encoded, attended_mask=encoded_mask)
+
+
+class WordTransformer(Initializable):
+    """The top brick.
+
+    It is often convenient to gather all bricks of the model under the
+    roof of a single top brick.
+
+    """
+
+    def __init__(self, dimension, alphabet_size, recurrent_type='rnn', **kwargs):
+        super(WordTransformer, self).__init__(**kwargs)
+
+        if recurrent_type == 'rnn':
+            enc_transition = SimpleRecurrent(activation=Tanh(), dim=dimension)
+            dec_transition = SimpleRecurrent(activation=Tanh(), dim=dimension)
+        elif recurrent_type == 'lstm':
+            enc_transition = LSTM(dim=dimension)
+            dec_transition = SimpleRecurrent(activation=Tanh(), dim=dimension)
+        elif recurrent_type == 'gru':
+            enc_transition = GatedRecurrent(dim=dimension)
+            dec_transition = SimpleRecurrent(activation=Tanh(), dim=dimension)
+        else:
+            raise ValueError('Invalid recurrent_type: ' + recurrent_type)
+
+        encoder = Encoder(dimension, enc_transition)
+        decoder = Decoder(dimension, alphabet_size, dec_transition)
+
+        self.encoder = encoder
+        self.decoder = decoder
+        self.children = [encoder, decoder]
 
     @application
     def cost(self, chars, chars_mask, targets, targets_mask):
-        return self.generator.cost_matrix(
-            targets, targets_mask,
-            attended=self.encoder.apply(
-                **dict_union(
-                    self.fork.apply(self.lookup.apply(chars), as_dict=True),
-                    mask=chars_mask)),
-            attended_mask=chars_mask)
+        return self.decoder.cost_matrix(
+            self.encoder.apply(chars, chars_mask), chars_mask,
+            targets, targets_mask)
 
     @application
     def generate(self, chars):
-        return self.generator.generate(
+        chars_mask = tensor.ones(chars.shape)
+        return self.decoder.generate(
             n_steps=3 * chars.shape[0], batch_size=chars.shape[1],
-            attended=self.encoder.apply(
-                **dict_union(
-                    self.fork.apply(self.lookup.apply(chars), as_dict=True))),
-            attended_mask=tensor.ones(chars.shape))
+            attended=self.encoder.apply(chars, chars_mask),
+            attended_mask=chars_mask)
 
 
 def train(transformer, dataset, num_batches, save_path, step_rule='original'):
