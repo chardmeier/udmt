@@ -1,9 +1,9 @@
+from hist.word import BidirectionalWithCombination, Concatenate
 from blocks.bricks import Tanh
-from blocks.bricks.recurrent import Bidirectional, SimpleRecurrent
+from blocks.bricks.recurrent import SimpleRecurrent
 from blocks.initialization import Orthogonal
 from numpy.testing import assert_allclose
 from theano import tensor
-
 
 import itertools
 import numpy
@@ -11,11 +11,12 @@ import theano
 import unittest
 
 
-class TestBidirectional(unittest.TestCase):
+class TestBidirectionalWithCombination(unittest.TestCase):
     def setUp(self):
-        self.bidir = Bidirectional(weights_init=Orthogonal(),
-                                   prototype=SimpleRecurrent(
-                                       dim=3, activation=Tanh()))
+        self.bidir = BidirectionalWithCombination(weights_init=Orthogonal(),
+                                                  combiner=Concatenate(input_dims=[3, 3]),
+                                                  prototype=SimpleRecurrent(
+                                                      dim=3, activation=Tanh()))
         self.simple = SimpleRecurrent(dim=3, weights_init=Orthogonal(),
                                       activation=Tanh(), seed=1)
         self.bidir.allocate()
@@ -32,7 +33,7 @@ class TestBidirectional(unittest.TestCase):
         self.mask_val = numpy.ones((24, 4), dtype=theano.config.floatX)
         self.mask_val[12:24, 3] = 0
 
-    def test(self):
+    def test_concatenation(self):
         x = tensor.tensor3('x')
         mask = tensor.matrix('mask')
         calc_bidir = theano.function([x, mask],
