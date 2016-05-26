@@ -48,3 +48,7 @@ class TestBidirectional(unittest.TestCase):
         assert output_names == ['states']
         assert_allclose(h_simple, h_bidir[..., :3], rtol=1e-04)
         assert_allclose(h_simple_rev, h_bidir[::-1, ...,  3:], rtol=1e-04)
+
+
+if __name__ == '__main__':
+    unittest.main()
