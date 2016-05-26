@@ -118,17 +118,16 @@ def load_historical(infile, voc=None, autoencoder=False):
 
 
 class Concatenate(Brick):
-    def __init__(self, dim_a, dim_b, **kwargs):
-        self.dim_a = dim_a
-        self.dim_b = dim_b
+    def __init__(self, input_dims, **kwargs):
+        self.input_dims = input_dims
         super().__init__(**kwargs)
 
     @application
-    def apply(self, aa, bb):
-        return [tensor.concatenate(a, b) for a, b in equizip(aa, bb)]
+    def apply(self, *args):
+        return [tensor.concatenate(vecs, axis=2) for vecs in equizip(*args)]
 
     def get_dim(self, name):
-        return self.dim_a + self.dim_b
+        return sum(self.input_dims)
 
 
 class CombineExtreme(Initializable):
@@ -144,10 +143,11 @@ class CombineExtreme(Initializable):
 
 class BidirectionalWithCombination(Bidirectional):
     def __init__(self, prototype, combiner, **kwargs):
-        kwargs.setdefault('children', []).append(combiner)
         super().__init__(prototype, **kwargs)
+        self.combiner = combiner
+        self.children.append(combiner)
 
-    @application
+    @application(outputs=['states'])
     def apply(self, *args, **kwargs):
         forward = self.children[0].apply(as_list=True, *args, **kwargs)
         backward = [x[::-1] for x in
