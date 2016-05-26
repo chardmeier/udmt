@@ -1,6 +1,7 @@
 # From blocks-examples/reverse_words
 
 import argparse
+import copy
 import logging
 import pprint
 import itertools
@@ -15,7 +16,7 @@ from picklable_itertools.extras import equizip
 from theano import tensor
 
 from blocks.bricks import Tanh, Initializable
-from blocks.bricks.base import application
+from blocks.bricks.base import application, Brick
 from blocks.bricks.lookup import LookupTable
 from blocks.bricks.recurrent import SimpleRecurrent, Bidirectional, LSTM, GatedRecurrent
 from blocks.bricks.attention import SequenceContentAttention
@@ -116,30 +117,80 @@ def load_historical(infile, voc=None, autoencoder=False):
     return IndexableDataset(data), voc
 
 
+class Concatenate(Brick):
+    def __init__(self, dim_a, dim_b, **kwargs):
+        self.dim_a = dim_a
+        self.dim_b = dim_b
+        super().__init__(**kwargs)
+
+    @application
+    def apply(self, aa, bb):
+        return [tensor.concatenate(a, b) for a, b in equizip(aa, bb)]
+
+    def get_dim(self, name):
+        return self.dim_a + self.dim_b
+
+
+class CombineExtreme(Initializable):
+    def __init__(self, operation, **kwargs):
+        self.operation = operation
+        kwargs.setdefault('children', []).append(operation)
+        super().__init__(**kwargs)
+
+    @application
+    def apply(self, forward, backward):
+        return self.operation.apply(forward[-1], backward[0])
+
+
+class BidirectionalWithCombination(Bidirectional):
+    def __init__(self, prototype, combiner, **kwargs):
+        kwargs.setdefault('children', []).append(combiner)
+        super().__init__(prototype, **kwargs)
+
+    @application
+    def apply(self, *args, **kwargs):
+        forward = self.children[0].apply(as_list=True, *args, **kwargs)
+        backward = [x[::-1] for x in
+                    self.children[1].apply(reverse=True, as_list=True,
+                                           *args, **kwargs)]
+        return self.combiner.apply(forward, backward)
+
+    def get_dim(self, name):
+        return self.combiner.get_dim(name)
+
+
 class Encoder(Initializable):
     def __init__(self, alphabet_size, dimension, transition, **kwargs):
         super(Encoder, self).__init__(**kwargs)
 
-        encoder = Bidirectional(transition)
+        forward = copy.deepcopy(transition)
+        forward.name = 'forward'
+        backward = copy.deepcopy(transition)
+        backward.name = 'backward'
 
-        fork = Fork([name for name in encoder.prototype.apply.sequences
+        fork = Fork([name for name in transition.apply.sequences
                      if name != 'mask'])
         fork.input_dim = dimension
-        fork.output_dims = [encoder.prototype.get_dim(name) for name in fork.input_names]
+        fork.output_dims = [transition.get_dim(name) for name in fork.input_names]
 
         lookup = LookupTable(alphabet_size, dimension)
 
-        self.encoder = encoder
+        self.forward = forward
+        self.backward = backward
         self.fork = fork
         self.lookup = lookup
-        self.children = [encoder, fork, lookup]
+        self.children = [forward, backward, fork, lookup]
 
     def _push_initialization_config(self):
         super()._push_initialization_config()
-        self.encoder.weights_init = Orthogonal()
+        self.forward.weights_init = Orthogonal()
+        self.backward.weights_init = Orthogonal()
 
     @application
     def apply(self, chars, chars_mask):
+        forward = self.children[0].apply(as_list=True)
+        backward = [x[::-1] for x in
+                    self.children[1].apply(reverse=True, as_list=True)]
         return self.encoder.apply(
             **dict_union(
                 self.fork.apply(self.lookup.apply(chars), as_dict=True),
