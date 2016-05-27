@@ -164,14 +164,10 @@ class BidirectionalWithCombination(Bidirectional):
 
 
 class Encoder(Initializable):
-    def __init__(self, alphabet_size, dimension, transition, **kwargs):
+    def __init__(self, alphabet_size, dimension, transition, combiner, **kwargs):
         super(Encoder, self).__init__(**kwargs)
 
-        forward = copy.deepcopy(transition)
-        forward.name = 'forward'
-        backward = copy.deepcopy(transition)
-        backward.name = 'backward'
-
+        encoder = BidirectionalWithCombination(prototype=transition, combiner=combiner)
         fork = Fork([name for name in transition.apply.sequences
                      if name != 'mask'])
         fork.input_dim = dimension
@@ -179,11 +175,10 @@ class Encoder(Initializable):
 
         lookup = LookupTable(alphabet_size, dimension)
 
-        self.forward = forward
-        self.backward = backward
+        self.encoder = encoder
         self.fork = fork
         self.lookup = lookup
-        self.children = [forward, backward, fork, lookup]
+        self.children = [encoder, fork, lookup]
 
     def _push_initialization_config(self):
         super()._push_initialization_config()
@@ -192,9 +187,6 @@ class Encoder(Initializable):
 
     @application
     def apply(self, chars, chars_mask):
-        forward = self.children[0].apply(as_list=True)
-        backward = [x[::-1] for x in
-                    self.children[1].apply(reverse=True, as_list=True)]
         return self.encoder.apply(
             **dict_union(
                 self.fork.apply(self.lookup.apply(chars), as_dict=True),
