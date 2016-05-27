@@ -39,7 +39,7 @@ from blocks.extensions.saveload import Checkpoint
 from blocks.extensions.monitoring import TrainingDataMonitoring
 from blocks.main_loop import MainLoop
 from blocks.filter import VariableFilter
-from blocks.utils import dict_union
+from blocks.utils import dict_union, extract_args
 
 from blocks.search import BeamSearch
 
@@ -118,13 +118,15 @@ def load_historical(infile, voc=None, autoencoder=False):
 
 
 class Concatenate(Brick):
-    def __init__(self, input_dims, **kwargs):
+    def __init__(self, input_dims, input_names, **kwargs):
+        self.input_names = input_names
         self.input_dims = input_dims
         super().__init__(**kwargs)
 
     @application
-    def apply(self, *args):
-        return [tensor.concatenate(vecs, axis=2) for vecs in equizip(*args)]
+    def apply(self, *args, **kwargs):
+        routed_args = extract_args(self.input_names, *args, **kwargs)
+        return tensor.concatenate(list(routed_args.values()), axis=-1)
 
     def get_dim(self, name):
         return sum(self.input_dims)
@@ -138,7 +140,9 @@ class CombineExtreme(Initializable):
 
     @application
     def apply(self, forward, backward):
-        return self.operation.apply(forward[-1], backward[0])
+        fwd_last = forward[-1, :]
+        bwd_first = backward[0, :]
+        return self.operation.apply(forward=fwd_last, backward=bwd_first)
 
 
 class BidirectionalWithCombination(Bidirectional):
@@ -153,7 +157,7 @@ class BidirectionalWithCombination(Bidirectional):
         backward = [x[::-1] for x in
                     self.children[1].apply(reverse=True, as_list=True,
                                            *args, **kwargs)]
-        return self.combiner.apply(forward, backward)
+        return [self.combiner.apply(fwd, bwd) for fwd, bwd in equizip(forward, backward)]
 
     def get_dim(self, name):
         return self.combiner.get_dim(name)

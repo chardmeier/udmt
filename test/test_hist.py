@@ -1,7 +1,8 @@
-from hist.word import BidirectionalWithCombination, Concatenate
+from hist.word import BidirectionalWithCombination, CombineExtreme, Concatenate
 from blocks.bricks import Tanh
+from blocks.bricks.parallel import Merge
 from blocks.bricks.recurrent import SimpleRecurrent
-from blocks.initialization import Orthogonal
+from blocks.initialization import Constant, Orthogonal
 from numpy.testing import assert_allclose
 from theano import tensor
 
@@ -13,18 +14,9 @@ import unittest
 
 class TestBidirectionalWithCombination(unittest.TestCase):
     def setUp(self):
-        self.bidir = BidirectionalWithCombination(weights_init=Orthogonal(),
-                                                  combiner=Concatenate(input_dims=[3, 3]),
-                                                  prototype=SimpleRecurrent(
-                                                      dim=3, activation=Tanh()))
         self.simple = SimpleRecurrent(dim=3, weights_init=Orthogonal(),
                                       activation=Tanh(), seed=1)
-        self.bidir.allocate()
         self.simple.initialize()
-        self.bidir.children[0].parameters[0].set_value(
-            self.simple.parameters[0].get_value())
-        self.bidir.children[1].parameters[0].set_value(
-            self.simple.parameters[0].get_value())
         self.x_val = 0.1 * numpy.asarray(
             list(itertools.permutations(range(4))),
             dtype=theano.config.floatX)
@@ -33,22 +25,120 @@ class TestBidirectionalWithCombination(unittest.TestCase):
         self.mask_val = numpy.ones((24, 4), dtype=theano.config.floatX)
         self.mask_val[12:24, 3] = 0
 
+    def _setup_bidir(self, combiner):
+        bidir = BidirectionalWithCombination(weights_init=Orthogonal(),
+                                             combiner=combiner,
+                                             prototype=SimpleRecurrent(
+                                                 dim=3, activation=Tanh()))
+        bidir.allocate()
+        bidir.children[0].parameters[0].set_value(self.simple.parameters[0].get_value())
+        bidir.children[1].parameters[0].set_value(self.simple.parameters[0].get_value())
+        return bidir
+
     def test_concatenation(self):
+        bidir = self._setup_bidir(Concatenate(input_dims=[3, 3], input_names=['forward', 'backward']))
         x = tensor.tensor3('x')
         mask = tensor.matrix('mask')
         calc_bidir = theano.function([x, mask],
-                                     [self.bidir.apply(x, mask=mask)])
+                                     [bidir.apply(x, mask=mask)])
         calc_simple = theano.function([x, mask],
                                       [self.simple.apply(x, mask=mask)])
         h_bidir = calc_bidir(self.x_val, self.mask_val)[0]
         h_simple = calc_simple(self.x_val, self.mask_val)[0]
         h_simple_rev = calc_simple(self.x_val[::-1], self.mask_val[::-1])[0]
 
-        output_names = self.bidir.apply.outputs
+        output_names = bidir.apply.outputs
 
         assert output_names == ['states']
         assert_allclose(h_simple, h_bidir[..., :3], rtol=1e-04)
         assert_allclose(h_simple_rev, h_bidir[::-1, ...,  3:], rtol=1e-04)
+
+    def test_merge(self):
+        # merge all time steps individually...
+        operation = Merge(input_names=['forward', 'backward'], input_dims=[3, 3],
+                          output_dim=4, weights_init=Orthogonal(),
+                          biases_init=Constant(1.8))
+        operation.children[0].use_bias = True
+        operation.push_initialization_config()
+        bidir = self._setup_bidir(operation)
+        operation.initialize()
+
+        x = tensor.tensor3('x')
+        mask = tensor.matrix('mask')
+        calc_bidir = theano.function([x, mask],
+                                     [bidir.apply(x, mask=mask)])
+        calc_simple = theano.function([x, mask],
+                                      [self.simple.apply(x, mask=mask)])
+        h_bidir = calc_bidir(self.x_val, self.mask_val)[0]
+        h_simple = calc_simple(self.x_val, self.mask_val)[0]
+        h_simple_rev = calc_simple(self.x_val[::-1], self.mask_val[::-1])[0]
+
+        w_f = operation.children[0].parameters[0].get_value()
+        w_b = operation.children[1].parameters[0].get_value()
+        bias = operation.children[0].parameters[1].get_value()
+
+        c_simple = numpy.dot(h_simple, w_f) + \
+                   numpy.dot(h_simple_rev[::-1], w_b) + bias
+
+        output_names = bidir.apply.outputs
+
+        assert output_names == ['states']
+        assert_allclose(c_simple, h_bidir, rtol=1e-04)
+
+    def test_combine_extreme_concat(self):
+        operation = Concatenate([3, 3], input_names=['forward', 'backward'])
+        bidir = self._setup_bidir(CombineExtreme(operation))
+
+        x = tensor.tensor3('x')
+        mask = tensor.matrix('mask')
+        calc_bidir = theano.function([x, mask],
+                                     [bidir.apply(x, mask=mask)])
+        calc_simple = theano.function([x, mask],
+                                      [self.simple.apply(x, mask=mask)])
+        h_bidir = calc_bidir(self.x_val, self.mask_val)[0]
+        h_simple = calc_simple(self.x_val, self.mask_val)[0]
+        h_simple_rev = calc_simple(self.x_val[::-1], self.mask_val[::-1])[0]
+
+        fwd_last = h_simple[-1, ...]
+        bwd_first = h_simple_rev[-1, ...]
+
+        c_simple = numpy.concatenate([fwd_last, bwd_first], axis=-1)
+
+        output_names = bidir.apply.outputs
+
+        assert output_names == ['states']
+        assert_allclose(c_simple, h_bidir, rtol=1e-04)
+
+    def test_combine_extreme_merge(self):
+        operation = Merge(input_names=['forward', 'backward'], input_dims=[3, 3],
+                          output_dim=3, weights_init=Orthogonal(),
+                          biases_init=Constant(1.8))
+        operation.children[0].use_bias = True
+        operation.push_initialization_config()
+        bidir = self._setup_bidir(CombineExtreme(operation))
+        operation.initialize()
+
+        x = tensor.tensor3('x')
+        mask = tensor.matrix('mask')
+        calc_bidir = theano.function([x, mask],
+                                     [bidir.apply(x, mask=mask)])
+        calc_simple = theano.function([x, mask],
+                                      [self.simple.apply(x, mask=mask)])
+        h_bidir = calc_bidir(self.x_val, self.mask_val)[0]
+        h_simple = calc_simple(self.x_val, self.mask_val)[0]
+        h_simple_rev = calc_simple(self.x_val[::-1], self.mask_val[::-1])[0]
+
+        w_f = operation.children[0].parameters[0].get_value()
+        w_b = operation.children[1].parameters[0].get_value()
+        bias = operation.children[0].parameters[1].get_value()
+
+        c_simple = numpy.dot(h_simple[-1, ...], w_f) + \
+                   numpy.dot(h_simple_rev[-1, ...], w_b) + bias
+
+        output_names = bidir.apply.outputs
+
+        assert output_names == ['states']
+        assert_allclose(c_simple, h_bidir, rtol=1e-04)
 
 
 if __name__ == '__main__':
