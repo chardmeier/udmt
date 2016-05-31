@@ -40,7 +40,7 @@ def load_conll(infile, chars_voc=None, pos_voc=None):
             seqs.append([(n.token, n.pos) for n in tr[1:]])
 
     if chars_voc is None:
-        chars = set(itertools.chain(t[0] for t in itertools.chain(seqs)))
+        chars = set(itertools.chain(*(t[0] for t in itertools.chain(*seqs))))
         chars_voc = {c: i + 4 for i, c in enumerate(sorted(chars))}
         chars_voc['<UNK>'] = 0
         chars_voc['<S>'] = 1
@@ -48,7 +48,7 @@ def load_conll(infile, chars_voc=None, pos_voc=None):
         chars_voc[' '] = 3
 
     if pos_voc is None:
-        tags = set(t[1] for t in itertools.chain(seqs))
+        tags = set(t[1] for t in itertools.chain(*seqs))
         pos_voc = {c: i + 3 for i, c in enumerate(sorted(tags))}
         pos_voc['<UNK>'] = 0
         pos_voc['<S>'] = 1
