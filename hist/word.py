@@ -151,13 +151,17 @@ class BidirectionalWithCombination(Bidirectional):
         self.combiner = combiner
         self.children.append(combiner)
 
-    @application(outputs=['states'])
+    @application
     def apply(self, *args, **kwargs):
         forward = self.children[0].apply(as_list=True, *args, **kwargs)
         backward = [x[::-1] for x in
                     self.children[1].apply(reverse=True, as_list=True,
                                            *args, **kwargs)]
         return [self.combiner.apply(fwd, bwd) for fwd, bwd in equizip(forward, backward)]
+
+    @apply.delegate
+    def apply_delegate(self):
+        return self.children[0].apply
 
     def get_dim(self, name):
         return self.combiner.get_dim(name)
