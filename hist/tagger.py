@@ -61,10 +61,10 @@ def load_conll(infile, chars_voc=None, pos_voc=None):
         snt_chars = [chars_voc['<S>']]
         snt_pos = [pos_voc['<S>']]
         snt_word_mask = [1]
-        for word, pos in snt:
+        for word, postag in snt:
             snt_chars.extend(chars_voc.get(c, chars_voc['<UNK>']) for c in word)
             snt_chars.append(chars_voc[' '])
-            snt_pos.extend([0] * len(word) + [pos_voc.get(pos, pos_voc['<UNK>'])])
+            snt_pos.extend([0] * len(word) + [pos_voc.get(postag, pos_voc['<UNK>'])])
             snt_word_mask.extend([0] * len(word) + [1])
         snt_chars.append(chars_voc['</S>'])
         snt_pos.append(pos_voc['</S>'])
