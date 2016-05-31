@@ -345,7 +345,6 @@ def main():
     parser.add_argument(
         "--step-rule", choices=["original", "rmsprop", "rms+mom", "adam", "adagrad"], default="original",
         help="The step rule for the search algorithm")
-    parser.set_defaults(autoencoder=False)
     args = parser.parse_args()
 
     dataset, chars_voc, pos_voc = load_conll(args.traincorpus)
