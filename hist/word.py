@@ -164,7 +164,10 @@ class BidirectionalWithCombination(Bidirectional):
         return self.children[0].apply
 
     def get_dim(self, name):
-        return self.combiner.get_dim(name)
+        if name in self.apply.outputs:
+            return self.combiner.get_dim(name)
+        else:
+            return self.children[0].get_dim(name)
 
 
 class Encoder(Initializable):
@@ -186,8 +189,7 @@ class Encoder(Initializable):
 
     def _push_initialization_config(self):
         super()._push_initialization_config()
-        self.forward.weights_init = Orthogonal()
-        self.backward.weights_init = Orthogonal()
+        self.encoder.weights_init = Orthogonal()
 
     @application
     def apply(self, chars, chars_mask):
