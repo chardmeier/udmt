@@ -145,6 +145,36 @@ class CombineExtreme(Initializable):
         return self.operation.apply(forward=fwd_last, backward=bwd_first)
 
 
+def _collect_mask(input_tensor, in_mask):
+    indices = tensor.nonzero(in_mask.T)
+    values, updates = theano.scan(lambda prev_exmpl, exmpl, cntr:
+                                  tensor.switch(tensor.eq(prev_exmpl, exmpl), cntr + 1, theano.shared(0)),
+                                  sequences=dict(input=indices[0], taps=[-1, 0]),
+                                  outputs_info=theano.shared(0))
+
+    # We lose the first index because it's at tap -1, but we know it must be zero.
+    new_indices = tensor.set_subtensor(tensor.zeros_like(indices[0])[1:], values)
+
+    z_output = tensor.zeros_like(input_tensor)
+    output = tensor.set_subtensor(z_output[new_indices, indices[0], :], input_tensor[indices[1], indices[0], :])
+
+    z_outmask = tensor.zeros_like(in_mask)
+    outmask = tensor.set_subtensor(z_outmask[new_indices, indices[0]], 1)
+
+    return output, outmask
+
+
+class CombineWords(Initializable):
+    def __init__(self, operation, **kwargs):
+        self.operation = operation
+        kwargs.setdefault('children', []).append(operation)
+        super().__init__(**kwargs)
+
+    @application
+    def apply(self, forward, backward):
+        pass
+
+
 class BidirectionalWithCombination(Bidirectional):
     def __init__(self, prototype, combiner, **kwargs):
         super().__init__(prototype, **kwargs)

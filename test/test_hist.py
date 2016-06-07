@@ -1,9 +1,9 @@
-from hist.word import BidirectionalWithCombination, CombineExtreme, Concatenate
+from hist.word import BidirectionalWithCombination, CombineExtreme, Concatenate, _collect_mask
 from blocks.bricks import Tanh
 from blocks.bricks.parallel import Merge
 from blocks.bricks.recurrent import SimpleRecurrent
 from blocks.initialization import Constant, Orthogonal
-from numpy.testing import assert_allclose
+from numpy.testing import assert_allclose, assert_equal
 from theano import tensor
 
 import itertools
@@ -139,6 +139,31 @@ class TestBidirectionalWithCombination(unittest.TestCase):
 
         assert output_names == ['states']
         assert_allclose(c_simple, h_bidir, rtol=1e-04)
+
+
+class TestCombineWords(unittest.TestCase):
+    def test_collect_mask(self):
+        t_data = tensor.tensor3()
+        t_mask = tensor.imatrix()
+
+        collect_fn = theano.function([t_data, t_mask], list(_collect_mask(t_data, t_mask)), on_unused_input='warn')
+
+        data = numpy.random.randn(10, 2, 7)
+        # data = numpy.arange(20).reshape((10, 2, 1))
+        mask = numpy.transpose(numpy.array([[1, 0, 0, 1, 0, 1, 0, 0, 0, 1],
+                                            [1, 0, 1, 0, 0, 1, 0, 1, 0, 1]], dtype=numpy.int8))
+
+        output, outmask = collect_fn(data, mask)
+
+        expected = numpy.zeros_like(data)
+        expected[(0, 1, 2, 3, 0, 1, 2, 3, 4), (0, 0, 0, 0, 1, 1, 1, 1, 1), :] =\
+            data[(0, 3, 5, 9, 0, 2, 5, 7, 9), (0, 0, 0, 0, 1, 1, 1, 1, 1), :]
+
+        expected_mask = numpy.transpose(numpy.array([[1, 1, 1, 1, 0, 0, 0, 0, 0, 0],
+                                                     [1, 1, 1, 1, 1, 0, 0, 0, 0, 0]], dtype=numpy.int8))
+
+        assert_allclose(output, expected, rtol=1e-4)
+        assert_equal(outmask, expected_mask)
 
 
 if __name__ == '__main__':
