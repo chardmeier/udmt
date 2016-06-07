@@ -170,9 +170,11 @@ class CombineWords(Initializable):
         kwargs.setdefault('children', []).append(operation)
         super().__init__(**kwargs)
 
-    @application
-    def apply(self, forward, backward):
-        pass
+    @application(outputs=['output', 'mask'])
+    def apply(self, forward, fwd_mask, backward, bwd_mask):
+        cforward, cfwd_mask = _collect_mask(forward, fwd_mask)
+        cbackward, cbwd_mask = _collect_mask(backward, bwd_mask)
+        return self.operation.apply(forward=cforward, backward=cbackward), cfwd_mask
 
 
 class BidirectionalWithCombination(Bidirectional):
@@ -191,7 +193,7 @@ class BidirectionalWithCombination(Bidirectional):
 
     @apply.delegate
     def apply_delegate(self):
-        return self.children[0].apply
+        return self.combiner.apply
 
     def get_dim(self, name):
         if name in self.apply.outputs:
