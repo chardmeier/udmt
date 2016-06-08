@@ -17,7 +17,7 @@ from dependency import conll_trees
 from fuel.transformers import Batch, Mapping, Padding
 from fuel.datasets import IndexableDataset
 from fuel.schemes import ConstantScheme, ShuffledScheme
-from hist.word import BidirectionalWithCombination, CombineExtreme, Encoder
+from hist.word import BidirectionalWithCombination, CombineWords, Encoder
 from theano import tensor
 
 import argparse
@@ -112,7 +112,7 @@ class TagDecoder(Initializable):
 
         sequence = BidirectionalWithCombination(weights_init=Orthogonal(),
                                                 prototype=transition,
-                                                combiner=CombineExtreme(combiner),
+                                                combiner=CombineWords(combiner),
                                                 name='pos_sequence')
         fork = Fork([name for name in sequence.apply.sequences if name != 'mask'])
         fork.input_dim = dimension
@@ -128,11 +128,11 @@ class TagDecoder(Initializable):
     @application
     def cost(self, word_enc, targets, mask=None):
         if mask is None:
-            mask = tensor.ones(targets.shape[-1])
-        context_enc = self.sequence.apply(
+            mask = tensor.ones(targets.shape[0:-1])
+        context_enc, collected_mask = self.sequence.apply(
             **dict_union(self.fork.apply(word_enc, as_dict=True), mask=mask))
         return tensor.dot(self.softmax.categorical_cross_entropy(targets, context_enc, extra_ndim=1),
-                          mask)
+                          collected_mask)
 
     @application
     def apply(self, word_enc, mask=None):

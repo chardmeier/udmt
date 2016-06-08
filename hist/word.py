@@ -139,10 +139,10 @@ class CombineExtreme(Initializable):
         super().__init__(**kwargs)
 
     @application
-    def apply(self, forward, backward):
+    def apply(self, forward, backward, **kwargs):
         fwd_last = forward[-1, :]
         bwd_first = backward[0, :]
-        return self.operation.apply(forward=fwd_last, backward=bwd_first)
+        return self.operation.apply(forward=fwd_last, backward=bwd_first, **kwargs)
 
 
 def _collect_mask(input_tensor, in_mask):
@@ -170,10 +170,10 @@ class CombineWords(Initializable):
         kwargs.setdefault('children', []).append(operation)
         super().__init__(**kwargs)
 
-    @application(outputs=['output', 'mask'])
-    def apply(self, forward, fwd_mask, backward, bwd_mask):
-        cforward, cfwd_mask = _collect_mask(forward, fwd_mask)
-        cbackward, cbwd_mask = _collect_mask(backward, bwd_mask)
+    @application(inputs=['forward', 'backward', 'mask'], outputs=['output', 'mask'])
+    def apply(self, forward, backward, mask):
+        cforward, cfwd_mask = _collect_mask(forward, mask)
+        cbackward, cbwd_mask = _collect_mask(backward, mask)
         return self.operation.apply(forward=cforward, backward=cbackward), cfwd_mask
 
 
@@ -189,11 +189,21 @@ class BidirectionalWithCombination(Bidirectional):
         backward = [x[::-1] for x in
                     self.children[1].apply(reverse=True, as_list=True,
                                            *args, **kwargs)]
-        return [self.combiner.apply(fwd, bwd) for fwd, bwd in equizip(forward, backward)]
+        combiner_kwargs = {}
+        if 'mask' in self.combiner.apply.inputs:
+            if 'mask' in kwargs:
+                combiner_kwargs['mask'] = kwargs['mask']
+            else:
+                combiner_kwargs['mask'] = tensor.ones(forward[0].shape[0:-1])
+        return [self.combiner.apply(fwd, bwd, **combiner_kwargs) for fwd, bwd in equizip(forward, backward)]
 
-    @apply.delegate
-    def apply_delegate(self):
-        return self.combiner.apply
+    @apply.property('sequences')
+    def apply_sequences(self):
+        return self.children[0].apply.sequences
+
+    @apply.property('outputs')
+    def apply_outputs(self):
+        return self.combiner.apply.outputs
 
     def get_dim(self, name):
         if name in self.apply.outputs:
