@@ -60,10 +60,12 @@ def load_conll(infile, chars_voc=None, pos_voc=None):
     zero = floatx_vals[0]
     one = floatx_vals[1]
 
+    words = []
     chars = []
     pos = []
     word_mask = []
     for snt in seqs:
+        snt_words = [word_tag[0] for word_tag in snt]
         snt_chars = [chars_voc['<S>']]
         snt_pos = [pos_voc['<S>']]
         snt_word_mask = [one]
@@ -76,14 +78,16 @@ def load_conll(infile, chars_voc=None, pos_voc=None):
         snt_pos.append(pos_voc['</S>'])
         snt_word_mask.append(one)
 
+        words.append(snt_words)
         chars.append(snt_chars)
         pos.append(snt_pos)
         word_mask.append(snt_word_mask)
 
     data = collections.OrderedDict()
+    data['words'] = words
     data['chars'] = chars
     data['pos'] = pos
-    data['pos_mask'] = word_mask
+    data['word_mask'] = word_mask
 
     return IndexableDataset(data), chars_voc, pos_voc
 
@@ -93,25 +97,29 @@ def load_vertical(infile, chars_voc):
     zero = floatx_vals[0]
     one = floatx_vals[1]
 
+    words = []
     chars = []
     word_mask = []
     for key, group in itertools.groupby(infile, lambda l: l == '\n'):
         if not key:
+            snt_words = [w.rstrip('\n') for w in group]
             snt_chars = [chars_voc['<S>']]
             snt_word_mask = [one]
-            for word in group:
+            for word in snt_words:
                 snt_chars.extend(chars_voc.get(c, chars_voc['<UNK>']) for c in word)
                 snt_chars.append(chars_voc[' '])
                 snt_word_mask.extend([zero] * len(word) + [one])
             snt_chars.append(chars_voc['</S>'])
             snt_word_mask.append(one)
 
+            words.append(snt_words)
             chars.append(snt_chars)
             word_mask.append(snt_word_mask)
 
     data = collections.OrderedDict()
+    data['words'] = words
     data['chars'] = chars
-    data['pos_mask'] = word_mask
+    data['word_mask'] = word_mask
 
     return IndexableDataset(data)
 
@@ -144,11 +152,11 @@ class TagDecoder(Initializable):
         return tensor.dot(self.softmax.categorical_cross_entropy(targets, context_enc, extra_ndim=1).T,
                           collected_mask)
 
-    @application
+    @application(outputs=['output', 'mask'])
     def apply(self, word_enc, mask=None):
-        context_enc = self.sequence.apply(
+        context_enc, collected_mask = self.sequence.apply(
             **dict_union(self.fork.apply(word_enc, as_dict=True), mask=mask))
-        return self.softmax.apply(context_enc)
+        return self.softmax.apply(context_enc, extra_ndim=1), collected_mask
 
 
 def _make_merge_combiner(dimension):
@@ -211,8 +219,8 @@ def train(postagger, dataset, num_batches, save_path, step_rule='original'):
     data_stream = dataset.get_example_stream()
     # data_stream = Filter(data_stream, _filter_long)
     # data_stream = Batch(data_stream, iteration_scheme=ConstantScheme(10))
-    data_stream = Padding(data_stream)
-    data_stream = FilterSources(data_stream, sources=['chars', 'chars_mask', 'pos', 'pos_mask'])
+    data_stream = Padding(data_stream, mask_sources=['chars', 'pos', 'word_mask'])
+    data_stream = FilterSources(data_stream, sources=['chars', 'chars_mask', 'pos', 'word_mask'])
     data_stream = Mapping(data_stream, _transpose)
 
     # Initialization settings
@@ -224,7 +232,7 @@ def train(postagger, dataset, num_batches, save_path, step_rule='original'):
     chars = tensor.lmatrix("chars")
     chars_mask = tensor.matrix("chars_mask")
     pos = tensor.lmatrix("pos")
-    pos_mask = tensor.matrix("pos_mask")
+    pos_mask = tensor.matrix("word_mask")
     batch_cost = postagger.cost(chars, chars_mask, pos, pos_mask).sum()
     batch_size = chars.shape[1].copy(name="batch_size")
     cost = aggregation.mean(batch_cost, batch_size)
@@ -302,33 +310,34 @@ def train(postagger, dataset, num_batches, save_path, step_rule='original'):
 def predict(postagger, dataset, save_path, chars_voc, pos_voc):
     data_stream = dataset.get_example_stream()
     data_stream = Batch(data_stream, iteration_scheme=ConstantScheme(50))
-    data_stream = Padding(data_stream)
-    data_stream = FilterSources(data_stream, sources=['chars', 'chars_mask', 'pos_mask'])
+    data_stream = FilterSources(data_stream, sources=['words', 'chars', 'word_mask'])
+    data_stream = Padding(data_stream, mask_sources=['chars', 'word_mask'])
+    data_stream = FilterSources(data_stream, sources=['words', 'chars', 'chars_mask', 'word_mask'])
     data_stream = Mapping(data_stream, _transpose)
 
     chars = tensor.lmatrix('chars')
     chars_mask = tensor.matrix('chars_mask')
-    word_mask = tensor.matrix('pos_mask')
-    pos = postagger.apply(chars, chars_mask, word_mask)
+    word_mask = tensor.matrix('word_mask')
+    pos, out_mask = postagger.apply(chars, chars_mask, word_mask)
 
     model = Model(pos)
     with open(save_path, 'rb') as f:
         model.set_parameter_values(load_parameters(f))
 
-    tag_fn = theano.function(inputs=[chars, chars_mask, word_mask], outputs=pos)
+    tag_fn = theano.function(inputs=[chars, chars_mask, word_mask], outputs=[pos, out_mask])
 
-    reverse_chars = {idx: word for word, idx in chars_voc.items()}
     reverse_pos = {idx: word for word, idx in pos_voc.items()}
 
-    for i_chars, i_chars_mask, i_word_mask in data_stream.get_epoch_iterator():
-        o_pos = tag_fn(i_chars, i_chars_mask, i_word_mask)
-        for i in range(o_pos.shape[0]):
-            for j in range(o_pos.shape[1]):
-                if not i_word_mask[i, j]:
-                    sys.stdout.write(reverse_chars[i_chars[i, j]])
-                else:
-                    sys.stdout.write('\t%s\n' % reverse_pos[o_pos[i, j]])
-            sys.stdout.write('\n')
+    for i_words, i_chars, i_chars_mask, i_word_mask in data_stream.get_epoch_iterator():
+        o_pos, o_mask = tag_fn(i_chars, i_chars_mask, i_word_mask)
+        o_pos_idx = numpy.argmax(o_pos, axis=-1)
+        for sntno in range(o_pos_idx.shape[1]):
+            words = i_words[sntno]
+            tags = [reverse_pos[o_pos_idx[i, sntno]] for i in range(o_pos_idx.shape[0]) if o_mask[i, sntno]]
+            # tags has begin and end tokens, words doesn't.
+            for word, tag in zip(words, tags[1:-1]):
+                print('%s\t%s' % (word, tag))
+            print()
 
 
 def main():
@@ -367,7 +376,8 @@ def main():
         num_batches = args.num_batches
         train(tagger, dataset, num_batches, args.model, step_rule=args.step_rule)
     elif args.mode == "predict":
-        testset = load_vertical(sys.stdin, chars_voc)
+        with open('/tmp/testfile', 'r') as f:
+            testset = load_vertical(f, chars_voc)
         predict(tagger, testset, args.model, chars_voc, pos_voc)
 
 
