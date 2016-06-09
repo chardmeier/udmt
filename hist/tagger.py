@@ -14,7 +14,7 @@ from blocks.monitoring import aggregation
 from blocks.serialization import load_parameters
 from blocks.utils import dict_union
 from dependency import conll_trees
-from fuel.transformers import Batch, Mapping, Padding
+from fuel.transformers import Batch, FilterSources, Mapping, Padding
 from fuel.datasets import IndexableDataset
 from fuel.schemes import ConstantScheme, ShuffledScheme
 from hist.word import BidirectionalWithCombination, CombineWords, Encoder
@@ -77,7 +77,7 @@ def load_conll(infile, chars_voc=None, pos_voc=None):
     data = collections.OrderedDict()
     data['chars'] = chars
     data['pos'] = pos
-    data['word_mask'] = word_mask
+    data['pos_mask'] = word_mask
 
     return IndexableDataset(data), chars_voc, pos_voc
 
@@ -101,7 +101,7 @@ def load_vertical(infile, chars_voc):
 
     data = collections.OrderedDict()
     data['chars'] = chars
-    data['word_mask'] = word_mask
+    data['pos_mask'] = word_mask
 
     return IndexableDataset(data)
 
@@ -131,7 +131,7 @@ class TagDecoder(Initializable):
             mask = tensor.ones(targets.shape[0:-1])
         context_enc, collected_mask = self.sequence.apply(
             **dict_union(self.fork.apply(word_enc, as_dict=True), mask=mask))
-        return tensor.dot(self.softmax.categorical_cross_entropy(targets, context_enc, extra_ndim=1),
+        return tensor.dot(self.softmax.categorical_cross_entropy(targets, context_enc, extra_ndim=1).T,
                           collected_mask)
 
     @application
@@ -202,6 +202,7 @@ def train(postagger, dataset, num_batches, save_path, step_rule='original'):
     # data_stream = Filter(data_stream, _filter_long)
     # data_stream = Batch(data_stream, iteration_scheme=ConstantScheme(10))
     data_stream = Padding(data_stream)
+    data_stream = FilterSources(data_stream, sources=['chars', 'chars_mask', 'pos', 'pos_mask'])
     data_stream = Mapping(data_stream, _transpose)
 
     # Initialization settings
@@ -291,7 +292,7 @@ def train(postagger, dataset, num_batches, save_path, step_rule='original'):
 def predict(postagger, dataset, save_path, chars_voc, pos_voc):
     data_stream = dataset.get_example_stream()
     data_stream = Batch(data_stream, iteration_scheme=ConstantScheme(50))
-    data_stream = Padding(data_stream)
+    data_stream = Padding(data_stream, mask_sources=['chars'])
     data_stream = Mapping(data_stream, _transpose)
 
     chars = tensor.lmatrix('chars')
