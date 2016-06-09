@@ -366,6 +366,9 @@ def main():
     parser.add_argument(
         "--step-rule", choices=["original", "rmsprop", "rms+mom", "adam", "adagrad"], default="original",
         help="The step rule for the search algorithm")
+    parser.add_argument(
+        "--test-file", required=False,
+        help="The file to test on in prediction mode")
     args = parser.parse_args()
 
     dataset, chars_voc, pos_voc = load_conll(args.traincorpus)
@@ -376,7 +379,12 @@ def main():
         num_batches = args.num_batches
         train(tagger, dataset, num_batches, args.model, step_rule=args.step_rule)
     elif args.mode == "predict":
-        testset = load_vertical(sys.stdin, chars_voc)
+        if args.test_file is None:
+            testset = load_vertical(sys.stdin, chars_voc)
+        else:
+            with open(args.test_file, 'r') as f:
+                testset = load_vertical(f, chars_voc)
+
         predict(tagger, testset, args.model, chars_voc, pos_voc)
 
 
