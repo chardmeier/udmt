@@ -1,6 +1,6 @@
 from blocks.algorithms import (GradientDescent, Scale,
                                StepClipping, CompositeRule, RMSProp, Adam, Momentum, AdaGrad)
-from blocks.bricks import application, Initializable, NDimensionalSoftmax, Tanh
+from blocks.bricks import application, Initializable, Linear, NDimensionalSoftmax, Tanh
 from blocks.bricks.parallel import Fork, Merge
 from blocks.bricks.recurrent import GatedRecurrent, LSTM, SimpleRecurrent
 from blocks.extensions import FinishAfter, Printing, Timing
@@ -72,8 +72,8 @@ def load_conll(infile, chars_voc=None, pos_voc=None):
         for word, postag in snt:
             snt_chars.extend(chars_voc.get(c, chars_voc['<UNK>']) for c in word)
             snt_chars.append(chars_voc[' '])
-            snt_pos.extend([0] * len(word) + [pos_voc.get(postag, pos_voc['<UNK>'])])
             snt_word_mask.extend([zero] * len(word) + [one])
+            snt_pos.append(pos_voc.get(postag, pos_voc['<UNK>']))
         snt_chars.append(chars_voc['</S>'])
         snt_pos.append(pos_voc['</S>'])
         snt_word_mask.append(one)
@@ -125,7 +125,7 @@ def load_vertical(infile, chars_voc):
 
 
 class TagDecoder(Initializable):
-    def __init__(self, dimension, transition, combiner, **kwargs):
+    def __init__(self, seq_dimension, pos_dimension, transition, combiner, **kwargs):
         super().__init__(**kwargs)
 
         sequence = BidirectionalWithCombination(weights_init=Orthogonal(),
@@ -133,30 +133,32 @@ class TagDecoder(Initializable):
                                                 combiner=CombineWords(combiner),
                                                 name='pos_sequence')
         fork = Fork([name for name in sequence.apply.sequences if name != 'mask'])
-        fork.input_dim = dimension
+        fork.input_dim = seq_dimension
         fork.output_dims = [sequence.get_dim(name) for name in fork.input_names]
+
+        linear = Linear(input_dim=seq_dimension, output_dim=pos_dimension)
 
         softmax = NDimensionalSoftmax(name='pos_softmax')
 
         self.fork = fork
         self.sequence = sequence
+        self.linear = linear
         self.softmax = softmax
-        self.children = [sequence, fork, softmax]
+        self.children = [sequence, fork, linear, softmax]
 
     @application
     def cost(self, word_enc, targets, mask=None):
-        if mask is None:
-            mask = tensor.ones(targets.shape[0:-1])
-        context_enc, collected_mask = self.sequence.apply(
-            **dict_union(self.fork.apply(word_enc, as_dict=True), mask=mask))
-        return tensor.dot(self.softmax.categorical_cross_entropy(targets, context_enc, extra_ndim=1).T,
-                          collected_mask)
+        predictions, out_mask = self.apply(word_enc, mask)
+        widx, exmpl = tensor.nonzero(out_mask)
+        tgtidx = targets[widx, exmpl]
+        crossentropy = -tensor.sum(tensor.log(predictions[widx, exmpl, tgtidx]))
+        return crossentropy
 
     @application(outputs=['output', 'mask'])
     def apply(self, word_enc, mask=None):
         context_enc, collected_mask = self.sequence.apply(
             **dict_union(self.fork.apply(word_enc, as_dict=True), mask=mask))
-        return self.softmax.apply(context_enc, extra_ndim=1), collected_mask
+        return self.softmax.apply(self.linear.apply(context_enc), extra_ndim=1), collected_mask
 
 
 def _make_merge_combiner(dimension):
@@ -169,7 +171,7 @@ def _make_merge_combiner(dimension):
 
 
 class POSTagger(Initializable):
-    def __init__(self, alphabet_size, char_dimension, word_dimension,
+    def __init__(self, alphabet_size, char_dimension, word_dimension, pos_dimension,
                  transition_type, **kwargs):
         super().__init__(**kwargs)
 
@@ -188,20 +190,22 @@ class POSTagger(Initializable):
             raise ValueError('Unknown transition type: ' + transition_type)
 
         encoder = Encoder(alphabet_size, char_dimension, transitions[0], _make_merge_combiner(char_dimension))
-        decoder = TagDecoder(word_dimension, transitions[1], _make_merge_combiner(word_dimension))
+        link = Linear(input_dim=char_dimension, output_dim=word_dimension)
+        decoder = TagDecoder(word_dimension, pos_dimension, transitions[1], _make_merge_combiner(word_dimension))
 
         self.encoder = encoder
+        self.link = link
         self.decoder = decoder
-        self.children = [encoder, decoder]
+        self.children = [encoder, link, decoder]
 
     @application
-    def cost(self, chars, char_mask, targets, word_mask):
-        return self.decoder.cost(self.encoder.apply(chars, char_mask),
+    def cost(self, chars, char_mask, word_mask, targets):
+        return self.decoder.cost(self.link.apply(self.encoder.apply(chars, char_mask)),
                                  targets, mask=word_mask)
 
     @application
     def apply(self, chars, char_mask, word_mask):
-        return self.decoder.apply(self.encoder.apply(chars, char_mask), mask=word_mask)
+        return self.decoder.apply(self.link.apply(self.encoder.apply(chars, char_mask)), mask=word_mask)
 
 
 def _transpose(data):
@@ -232,8 +236,8 @@ def train(postagger, dataset, num_batches, save_path, step_rule='original'):
     chars = tensor.lmatrix("chars")
     chars_mask = tensor.matrix("chars_mask")
     pos = tensor.lmatrix("pos")
-    pos_mask = tensor.matrix("word_mask")
-    batch_cost = postagger.cost(chars, chars_mask, pos, pos_mask).sum()
+    word_mask = tensor.matrix("word_mask")
+    batch_cost = postagger.cost(chars, chars_mask, word_mask, pos).sum()
     batch_size = chars.shape[1].copy(name="batch_size")
     cost = aggregation.mean(batch_cost, batch_size)
     cost.name = "cost"
@@ -373,7 +377,7 @@ def main():
 
     dataset, chars_voc, pos_voc = load_conll(args.traincorpus)
 
-    tagger = POSTagger(len(chars_voc), 100, 100, args.recurrent_type, name="tagger")
+    tagger = POSTagger(len(chars_voc), 100, 101, len(pos_voc), args.recurrent_type, name="tagger")
 
     if args.mode == "train":
         num_batches = args.num_batches
