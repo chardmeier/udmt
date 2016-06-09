@@ -376,8 +376,7 @@ def main():
         num_batches = args.num_batches
         train(tagger, dataset, num_batches, args.model, step_rule=args.step_rule)
     elif args.mode == "predict":
-        with open('/tmp/testfile', 'r') as f:
-            testset = load_vertical(f, chars_voc)
+        testset = load_vertical(sys.stdin, chars_voc)
         predict(tagger, testset, args.model, chars_voc, pos_voc)
 
 
