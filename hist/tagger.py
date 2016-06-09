@@ -60,15 +60,15 @@ def load_conll(infile, chars_voc=None, pos_voc=None):
     for snt in seqs:
         snt_chars = [chars_voc['<S>']]
         snt_pos = [pos_voc['<S>']]
-        snt_word_mask = [1]
+        snt_word_mask = [1.0]
         for word, postag in snt:
             snt_chars.extend(chars_voc.get(c, chars_voc['<UNK>']) for c in word)
             snt_chars.append(chars_voc[' '])
             snt_pos.extend([0] * len(word) + [pos_voc.get(postag, pos_voc['<UNK>'])])
-            snt_word_mask.extend([0] * len(word) + [1])
+            snt_word_mask.extend([0.0] * len(word) + [1.0])
         snt_chars.append(chars_voc['</S>'])
         snt_pos.append(pos_voc['</S>'])
-        snt_word_mask.append(1)
+        snt_word_mask.append(1.0)
 
         chars.append(snt_chars)
         pos.append(snt_pos)
@@ -88,13 +88,13 @@ def load_vertical(infile, chars_voc):
     for key, group in itertools.groupby(infile, lambda l: l == '\n'):
         if not key:
             snt_chars = [chars_voc['<S>']]
-            snt_word_mask = [1]
+            snt_word_mask = [1.0]
             for word in group:
                 snt_chars.extend(chars_voc.get(c, chars_voc['<UNK>']) for c in word)
                 snt_chars.append(chars_voc[' '])
-                snt_word_mask.extend([0] * len(word) + [1])
+                snt_word_mask.extend([0.0] * len(word) + [1.0])
             snt_chars.append(chars_voc['</S>'])
-            snt_word_mask.append(1)
+            snt_word_mask.append(1.0)
 
             chars.append(snt_chars)
             word_mask.append(snt_word_mask)
