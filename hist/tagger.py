@@ -22,9 +22,11 @@ from theano import tensor
 
 import argparse
 import collections
+import fuel
 import itertools
 import logging
 import math
+import numpy
 import pprint
 import sys
 import theano
@@ -54,21 +56,25 @@ def load_conll(infile, chars_voc=None, pos_voc=None):
         pos_voc['<S>'] = 1
         pos_voc['</S>'] = 2
 
+    floatx_vals = numpy.arange(2, dtype=fuel.config.floatX)
+    zero = floatx_vals[0]
+    one = floatx_vals[1]
+
     chars = []
     pos = []
     word_mask = []
     for snt in seqs:
         snt_chars = [chars_voc['<S>']]
         snt_pos = [pos_voc['<S>']]
-        snt_word_mask = [1.0]
+        snt_word_mask = [one]
         for word, postag in snt:
             snt_chars.extend(chars_voc.get(c, chars_voc['<UNK>']) for c in word)
             snt_chars.append(chars_voc[' '])
             snt_pos.extend([0] * len(word) + [pos_voc.get(postag, pos_voc['<UNK>'])])
-            snt_word_mask.extend([0.0] * len(word) + [1.0])
+            snt_word_mask.extend([zero] * len(word) + [one])
         snt_chars.append(chars_voc['</S>'])
         snt_pos.append(pos_voc['</S>'])
-        snt_word_mask.append(1.0)
+        snt_word_mask.append(one)
 
         chars.append(snt_chars)
         pos.append(snt_pos)
@@ -83,18 +89,22 @@ def load_conll(infile, chars_voc=None, pos_voc=None):
 
 
 def load_vertical(infile, chars_voc):
+    floatx_vals = numpy.arange(2, dtype=fuel.config.floatX)
+    zero = floatx_vals[0]
+    one = floatx_vals[1]
+
     chars = []
     word_mask = []
     for key, group in itertools.groupby(infile, lambda l: l == '\n'):
         if not key:
             snt_chars = [chars_voc['<S>']]
-            snt_word_mask = [1.0]
+            snt_word_mask = [one]
             for word in group:
                 snt_chars.extend(chars_voc.get(c, chars_voc['<UNK>']) for c in word)
                 snt_chars.append(chars_voc[' '])
-                snt_word_mask.extend([0.0] * len(word) + [1.0])
+                snt_word_mask.extend([zero] * len(word) + [one])
             snt_chars.append(chars_voc['</S>'])
-            snt_word_mask.append(1.0)
+            snt_word_mask.append(one)
 
             chars.append(snt_chars)
             word_mask.append(snt_word_mask)
