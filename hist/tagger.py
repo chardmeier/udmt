@@ -267,7 +267,7 @@ def train(postagger, dataset, num_batches, save_path, step_rule='original'):
 
     # Construct the main loop and start training!
     average_monitoring = TrainingDataMonitoring(
-        observables, prefix="average", every_n_batches=10)
+        observables, prefix="average", every_n_batches=25)
 
     main_loop = MainLoop(
         model=model,
@@ -285,7 +285,7 @@ def train(postagger, dataset, num_batches, save_path, step_rule='original'):
             # because loading the whole pickle takes quite some time.
             Checkpoint(save_path, every_n_batches=500,
                        save_separately=["model", "log"]),
-            Printing(every_n_batches=1)])
+            Printing(every_n_batches=25)])
     main_loop.run()
 
 
