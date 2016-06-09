@@ -1,5 +1,6 @@
 import copy
 import itertools
+import re
 
 
 FNWORD_POS = {'ADP', 'AUX', 'CONJ', 'DET', 'PART', 'PRON', 'PUNCT', 'SCONJ'}
@@ -11,7 +12,8 @@ def conll_trees(conll_file):
             nodes = []
             nodes.append(Node(nodes))
             for line in group:
-                if line.startswith('#'):
+                # Skip comments and nodes that span multiple tokens
+                if re.match(r'#|[0-9]+-[0-9]+', line):
                     continue
                 nodes.append(Node(nodes, conll_line=line.rstrip('\n')))
             for n in nodes[1:]:
