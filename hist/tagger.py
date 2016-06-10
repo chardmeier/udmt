@@ -37,9 +37,8 @@ logger = logging.getLogger(__name__)
 
 def load_conll(infile, chars_voc=None, pos_voc=None):
     seqs = []
-    with open(infile, 'r') as f:
-        for tr in conll_trees(f):
-            seqs.append([(n.token, n.pos) for n in tr[1:]])
+    for tr in conll_trees(infile):
+        seqs.append([(n.token, n.pos) for n in tr[1:]])
 
     if chars_voc is None:
         chars = set(itertools.chain(*(t[0] for t in itertools.chain(*seqs))))
@@ -86,8 +85,8 @@ def load_conll(infile, chars_voc=None, pos_voc=None):
     data = collections.OrderedDict()
     data['words'] = words
     data['chars'] = chars
-    data['pos'] = pos
     data['word_mask'] = word_mask
+    data['pos'] = pos
 
     return IndexableDataset(data), chars_voc, pos_voc
 
@@ -223,8 +222,8 @@ def train(postagger, dataset, num_batches, save_path, step_rule='original'):
     data_stream = dataset.get_example_stream()
     # data_stream = Filter(data_stream, _filter_long)
     # data_stream = Batch(data_stream, iteration_scheme=ConstantScheme(10))
-    data_stream = Padding(data_stream, mask_sources=['chars', 'pos', 'word_mask'])
-    data_stream = FilterSources(data_stream, sources=['chars', 'chars_mask', 'pos', 'word_mask'])
+    data_stream = Padding(data_stream, mask_sources=['chars', 'word_mask', 'pos'])
+    data_stream = FilterSources(data_stream, sources=['chars', 'chars_mask', 'word_mask', 'pos'])
     data_stream = Mapping(data_stream, _transpose)
 
     # Initialization settings
@@ -311,7 +310,7 @@ def train(postagger, dataset, num_batches, save_path, step_rule='original'):
     main_loop.run()
 
 
-def predict(postagger, dataset, save_path, chars_voc, pos_voc):
+def predict(postagger, dataset, save_path, pos_voc):
     data_stream = dataset.get_example_stream()
     data_stream = Batch(data_stream, iteration_scheme=ConstantScheme(50))
     data_stream = FilterSources(data_stream, sources=['words', 'chars', 'word_mask'])
@@ -344,12 +343,78 @@ def predict(postagger, dataset, save_path, chars_voc, pos_voc):
             print()
 
 
+def evaluate(postagger, dataset, save_path, pos_voc):
+    data_stream = dataset.get_example_stream()
+    data_stream = Batch(data_stream, iteration_scheme=ConstantScheme(50))
+    data_stream = FilterSources(data_stream, sources=['chars', 'word_mask', 'pos'])
+    data_stream = Padding(data_stream, mask_sources=['chars', 'word_mask', 'pos'])
+    data_stream = FilterSources(data_stream, sources=['chars', 'chars_mask', 'word_mask', 'pos'])
+    data_stream = Mapping(data_stream, _transpose)
+
+    chars = tensor.lmatrix('chars')
+    chars_mask = tensor.matrix('chars_mask')
+    word_mask = tensor.matrix('word_mask')
+    pos, out_mask = postagger.apply(chars, chars_mask, word_mask)
+
+    model = Model(pos)
+    with open(save_path, 'rb') as f:
+        model.set_parameter_values(load_parameters(f))
+
+    tag_fn = theano.function(inputs=[chars, chars_mask, word_mask], outputs=[pos, out_mask])
+
+    npos = len(pos_voc)
+
+    # total = 0
+    # matches = 0
+
+    gold_table = numpy.zeros((npos,))
+    pred_table = numpy.zeros((npos,))
+    hit_table = numpy.zeros((npos,))
+
+    for i_chars, i_chars_mask, i_word_mask, i_pos_idx in data_stream.get_epoch_iterator():
+        o_pos, o_mask = tag_fn(i_chars, i_chars_mask, i_word_mask)
+        o_pos_idx = numpy.argmax(o_pos, axis=-1)
+
+        # total += o_mask.sum()
+        # matches += ((i_pos_idx == o_pos_idx) * o_mask).sum()
+
+        fmask = numpy.flatnonzero(o_mask)
+        fgold = i_pos_idx.flatten()[fmask]
+        fpredict = o_pos_idx.flatten()[fmask]
+
+        gold_pos, gold_counts = numpy.unique(fgold, return_counts=True)
+        gold_table[gold_pos] += gold_counts
+
+        pred_pos, pred_counts = numpy.unique(fpredict, return_counts=True)
+        pred_table[pred_pos] += pred_counts
+
+        hit_pos, hit_counts = numpy.unique(fgold[fgold == fpredict], return_counts=True)
+        hit_table[hit_pos] += hit_counts
+
+    reverse_pos = {idx: word for word, idx in pos_voc.items()}
+
+    total = gold_table[3:].sum()
+    matches = hit_table[3:].sum()
+
+    precision = hit_table / pred_table
+    recall = hit_table / gold_table
+    fscore = 2.0 * precision * recall / (precision + recall)
+
+    print('Accuracy: %5d/%5d = %6f\n' % (matches, total, matches/total))
+    for i in range(npos):
+        print('%10s : P = %4d/%4d = %6f      R = %4d/%4d = %6f      F = %6f' %
+              (reverse_pos[i],
+               hit_table[i], pred_table[i], precision[i],
+               hit_table[i], gold_table[i], recall[i],
+               fscore[i]))
+
+
 def main():
     parser = argparse.ArgumentParser(
         "POS tagger",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument(
-        "mode", choices=["train", "predict"],
+        "mode", choices=["train", "predict", "eval"],
         help="The mode to run. In the `train` mode a model is trained."
              " In the `predict` mode a trained model is "
              " to used to tag the input text.")
@@ -375,7 +440,8 @@ def main():
         help="The file to test on in prediction mode")
     args = parser.parse_args()
 
-    dataset, chars_voc, pos_voc = load_conll(args.traincorpus)
+    with open(args.traincorpus, 'r') as f:
+        dataset, chars_voc, pos_voc = load_conll(f)
 
     tagger = POSTagger(len(chars_voc), 100, 101, len(pos_voc), args.recurrent_type, name="tagger")
 
@@ -383,13 +449,13 @@ def main():
         num_batches = args.num_batches
         train(tagger, dataset, num_batches, args.model, step_rule=args.step_rule)
     elif args.mode == "predict":
-        if args.test_file is None:
-            testset = load_vertical(sys.stdin, chars_voc)
-        else:
-            with open(args.test_file, 'r') as f:
-                testset = load_vertical(f, chars_voc)
-
-        predict(tagger, testset, args.model, chars_voc, pos_voc)
+        with open(args.test_file, 'r') if args.test_file is not None else sys.stdin as f:
+            testset = load_vertical(f, chars_voc)
+        predict(tagger, testset, args.model, pos_voc)
+    elif args.mode == "eval":
+        with open(args.test_file, 'r') if args.test_file is not None else sys.stdin as f:
+            testset, _, _ = load_conll(f, chars_voc=chars_voc, pos_voc=pos_voc)
+        evaluate(tagger, testset, args.model, pos_voc)
 
 
 if __name__ == '__main__':
