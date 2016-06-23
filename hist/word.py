@@ -18,9 +18,9 @@ from theano import tensor
 from blocks.bricks import Tanh, Initializable
 from blocks.bricks.base import application, Brick
 from blocks.bricks.lookup import LookupTable
-from blocks.bricks.recurrent import SimpleRecurrent, Bidirectional, LSTM, GatedRecurrent
+from blocks.bricks.recurrent import BaseRecurrent, SimpleRecurrent, Bidirectional, LSTM, GatedRecurrent
 from blocks.bricks.attention import SequenceContentAttention
-from blocks.bricks.parallel import Fork
+from blocks.bricks.parallel import Distribute, Fork
 from blocks.bricks.sequence_generators import (
     SequenceGenerator, Readout, SoftmaxEmitter, LookupFeedback)
 from blocks.config import config
@@ -39,7 +39,7 @@ from blocks.extensions.saveload import Checkpoint
 from blocks.extensions.monitoring import TrainingDataMonitoring
 from blocks.main_loop import MainLoop
 from blocks.filter import VariableFilter
-from blocks.utils import dict_union, extract_args
+from blocks.utils import dict_subset, dict_union, extract_args
 
 from blocks.search import BeamSearch
 
@@ -142,7 +142,7 @@ class CombineExtreme(Initializable):
         kwargs.setdefault('children', []).append(operation)
         super().__init__(**kwargs)
 
-    @application
+    @application(inputs=['forward', 'backward'], outputs=['output'])
     def apply(self, forward, backward, **kwargs):
         fwd_last = forward[-1, :]
         bwd_first = backward[0, :]
@@ -216,6 +216,62 @@ class BidirectionalWithCombination(Bidirectional):
             return self.children[0].get_dim(name)
 
 
+class EncDecRecurrent(BaseRecurrent, Initializable):
+    def __init__(self, transition, attended_dim, attended_name='attended', **kwargs):
+        super().__init__(**kwargs)
+        normal_inputs = [name for name in transition.apply.sequences
+                         if 'mask' not in name]
+        distribute = Distribute(target_names=normal_inputs, source_name=attended_name, source_dim=attended_dim)
+
+        self.attended_name = attended_name
+        self.attended_mask_name = attended_name + '_mask'
+
+        self.distribute = distribute
+        self.transition = transition
+        self.children = [transition, distribute]
+
+    def _push_allocation_config(self):
+        self.distribute.target_dims = self.transition.get_dims(self.distribute.target_names)
+
+    def get_dim(self, name):
+        if name == self.attended_name:
+            return self.distribute.get_dim(self.distribute.apply.inputs[0])
+        elif name == self.attended_mask_name:
+            return 0
+        return self.transition.get_dim(name)
+
+    @application
+    def apply(self, **kwargs):
+        attended = kwargs.pop(self.attended_name)
+        # attended_mask_name can be optional
+        kwargs.pop(self.attended_mask_name, None)
+
+        # attended_mask isn't actually used here, we just rely on the fact that the recurrent cells keep emitting
+        # the last state after the end of the sequence.
+        compressed = attended[-1, :, :]
+
+        # make sure we are not popping the mask
+        normal_inputs = [name for name in self.transition.apply.sequences
+                         if 'mask' not in name]
+        sequences = dict_subset(kwargs, normal_inputs, pop=True)
+
+        sequences.update(self.distribute.apply(
+            as_dict=True, **dict_subset(dict_union(sequences, {self.attended_name: compressed}),
+                                        self.distribute.apply.inputs)))
+        current_states = self.transition.apply(
+            as_list=True,
+            **dict_union(sequences, kwargs))
+        return current_states
+
+    @apply.property('contexts')
+    def apply_contexts(self):
+        return [self.attended_name, self.attended_mask_name]
+
+    @apply.delegate
+    def apply_delegate(self):
+        return self.transition.apply
+
+
 class Encoder(Initializable):
     def __init__(self, alphabet_size, dimension, transition, combiner, **kwargs):
         super(Encoder, self).__init__(**kwargs)
@@ -246,21 +302,28 @@ class Encoder(Initializable):
 
 
 class Decoder(Initializable):
-    def __init__(self, dimension, alphabet_size, transition, **kwargs):
+    def __init__(self, dimension, alphabet_size, transition, use_attention=True, **kwargs):
         super(Decoder, self).__init__(**kwargs)
 
-        attention = SequenceContentAttention(
-            state_names=transition.apply.states,
-            attended_dim=2 * dimension, match_dim=dimension, name="attention")
+        if use_attention:
+            attention = SequenceContentAttention(
+                state_names=transition.apply.states,
+                attended_dim=2 * dimension, match_dim=dimension, name="attention")
+            readout_sources = [transition.apply.states[0], attention.take_glimpses.outputs[0]]
+            wrapped_transition = transition
+        else:
+            attention = None
+            readout_sources = [transition.apply.states[0]]
+            wrapped_transition = EncDecRecurrent(transition, dimension)
+
         readout = Readout(
             readout_dim=alphabet_size,
-            source_names=[transition.apply.states[0],
-                          attention.take_glimpses.outputs[0]],
+            source_names=readout_sources,
             emitter=SoftmaxEmitter(name="emitter"),
             feedback_brick=LookupFeedback(alphabet_size, dimension),
             name="readout")
         generator = SequenceGenerator(
-            readout=readout, transition=transition, attention=attention,
+            readout=readout, transition=wrapped_transition, attention=attention,
             name="generator")
 
         self.generator = generator
@@ -276,7 +339,7 @@ class Decoder(Initializable):
 
     @application
     def generate(self, encoded, encoded_mask, n_steps, batch_size):
-        return self.decoder.generate(
+        return self.generator.generate(
             n_steps=n_steps, batch_size=batch_size,
             attended=encoded, attended_mask=encoded_mask)
 
@@ -289,7 +352,7 @@ class WordTransformer(Initializable):
 
     """
 
-    def __init__(self, dimension, alphabet_size, recurrent_type='rnn', **kwargs):
+    def __init__(self, dimension, alphabet_size, recurrent_type='rnn', use_attention=True, **kwargs):
         super(WordTransformer, self).__init__(**kwargs)
 
         if recurrent_type == 'rnn':
@@ -306,7 +369,7 @@ class WordTransformer(Initializable):
 
         combiner = Concatenate([dimension] * 2, ['forward', 'backward'])
         encoder = Encoder(alphabet_size, dimension, enc_transition, combiner)
-        decoder = Decoder(dimension, alphabet_size, dec_transition)
+        decoder = Decoder(dimension, alphabet_size, dec_transition, use_attention=use_attention)
 
         self.encoder = encoder
         self.decoder = decoder
@@ -344,11 +407,11 @@ def train(transformer, dataset, num_batches, save_path, step_rule='original'):
 
     # Build the cost computation graph
     raw = tensor.lmatrix("raw")
-    raw_norm = tensor.matrix("raw_mask")
+    raw_mask = tensor.matrix("raw_mask")
     norm = tensor.lmatrix("norm")
     norm_mask = tensor.matrix("norm_mask")
     batch_cost = transformer.cost(
-        raw, raw_norm, norm, norm_mask).sum()
+        raw, raw_mask, norm, norm_mask).sum()
     batch_size = raw.shape[1].copy(name="batch_size")
     cost = aggregation.mean(batch_cost, batch_size)
     cost.name = "sequence_log_likelihood"
@@ -543,12 +606,16 @@ def main():
     parser.add_argument(
         "--autoencoder", dest='autoencoder', action='store_true',
         help="Train an autoencoder instead of a transducer")
+    parser.add_argument(
+        "--disable-attention", dest='use_attention', action='store_false',
+        help="Use encoder/decoder configuration instead of attention mechanism")
     parser.set_defaults(autoencoder=False)
     args = parser.parse_args()
 
     dataset, voc = load_historical(args.traincorpus, autoencoder=args.autoencoder)
 
-    transformer = WordTransformer(100, len(voc), name="transformer", recurrent_type=args.recurrent_type)
+    transformer = WordTransformer(100, len(voc), name="transformer",
+                                  recurrent_type=args.recurrent_type, use_attention=args.use_attention)
 
     if args.mode == "train":
         num_batches = args.num_batches
