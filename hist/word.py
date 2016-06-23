@@ -123,10 +123,14 @@ class Concatenate(Brick):
         self.input_dims = input_dims
         super().__init__(**kwargs)
 
-    @application
+    @application(outputs=['output'])
     def apply(self, *args, **kwargs):
         routed_args = extract_args(self.input_names, *args, **kwargs)
         return tensor.concatenate(list(routed_args.values()), axis=-1)
+
+    @apply.property('inputs')
+    def apply_inputs(self):
+        return self.input_names
 
     def get_dim(self, name):
         return sum(self.input_dims)
@@ -300,12 +304,13 @@ class WordTransformer(Initializable):
         else:
             raise ValueError('Invalid recurrent_type: ' + recurrent_type)
 
-        encoder = Encoder(alphabet_size, dimension, enc_transition)
+        combiner = Concatenate([dimension] * 2, ['forward', 'backward'])
+        encoder = Encoder(alphabet_size, dimension, enc_transition, combiner)
         decoder = Decoder(dimension, alphabet_size, dec_transition)
 
         self.encoder = encoder
         self.decoder = decoder
-        self.children = [encoder, decoder]
+        self.children = [encoder, decoder, combiner]
 
     @application
     def cost(self, chars, chars_mask, targets, targets_mask):
