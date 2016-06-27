@@ -160,7 +160,7 @@ class TagDecoder(Initializable):
         return self.softmax.apply(self.linear.apply(context_enc), extra_ndim=1), collected_mask
 
 
-def _make_merge_combiner(dimension):
+def make_merge_combiner(dimension):
     combiner = Merge(input_names=['forward', 'backward'], input_dims=[dimension] * 2,
                      output_dim=dimension, weights_init=IsotropicGaussian(0.1),
                      biases_init=Constant(0))
@@ -188,9 +188,9 @@ class POSTagger(Initializable):
         else:
             raise ValueError('Unknown transition type: ' + transition_type)
 
-        encoder = Encoder(alphabet_size, char_dimension, transitions[0], _make_merge_combiner(char_dimension))
+        encoder = Encoder(alphabet_size, char_dimension, transitions[0], make_merge_combiner(char_dimension))
         link = Linear(input_dim=char_dimension, output_dim=word_dimension)
-        decoder = TagDecoder(word_dimension, pos_dimension, transitions[1], _make_merge_combiner(word_dimension))
+        decoder = TagDecoder(word_dimension, pos_dimension, transitions[1], make_merge_combiner(word_dimension))
 
         self.encoder = encoder
         self.link = link
