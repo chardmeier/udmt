@@ -1,6 +1,7 @@
 from blocks.algorithms import (GradientDescent, Scale,
                                StepClipping, CompositeRule, RMSProp, Adam, Momentum, AdaGrad)
 from blocks.bricks import application, Initializable, Logistic, MLP, Tanh
+from blocks.bricks.recurrent import GatedRecurrent, LSTM, SimpleRecurrent
 from blocks.config import config
 from blocks.extensions import FinishAfter, Printing, Timing
 from blocks.extensions.monitoring import TrainingDataMonitoring
@@ -26,6 +27,7 @@ import logging
 import math
 import numpy
 import pprint
+import re
 import theano
 
 
@@ -39,8 +41,9 @@ def load_training(infile, chars_voc=None):
     zero = floatx_vals[0]
     one = floatx_vals[1]
 
+    empty_line = re.compile(r'\s*$')
     seqs = []
-    for key, group in itertools.groupby(infile, lambda l: l == '\n'):
+    for key, group in itertools.groupby(infile, lambda l: empty_line.match(l)):
         if not key:
             seqs.append([l.rstrip('\n').split('\t') for l in group])
 
@@ -73,10 +76,10 @@ def load_training(infile, chars_voc=None):
             norm_chars.append(chars_voc[' '])
             norm_word_mask.extend([zero] * len(norm) + [one])
             prediction_truth[i, norm_word] = one
-        hist_chars.append(chars_voc['</S>'])
-        norm_chars.append(chars_voc['</S>'])
-        hist_word_mask.append(one)
-        norm_word_mask.append(one)
+        hist_chars[-1] = chars_voc['</S>']
+        norm_chars[-1] = chars_voc['</S>']
+        # hist_word_mask.append(one)
+        # norm_word_mask.append(one)
 
         all_hist.append(hist_chars)
         all_norm.append(norm_chars)
@@ -117,6 +120,13 @@ class ContextEmbedder(Initializable):
         hist_enc, collected_mask = self.encoder.apply(hist, hist_mask)
         norm_enc, _ = self.encoder.apply(norm, norm_mask)
 
+        # Since we know the maximum number of words per sentence and the word mask has been collected,
+        # we needn't carry around all the empty entries up to the maximum number of chars.
+        max_words = prediction_truth.shape[0]
+        hist_enc = hist_enc[0:max_words, :]
+        norm_enc = norm_enc[0:max_words, :]
+        collected_mask = collected_mask[0:max_words, :]
+
         # Axes: time x batch x features
         diff_cost = (collected_mask * tensor.sqr(norm_enc - hist_enc).sum(axis=2)).sum(axis=0).mean()
 
@@ -140,7 +150,7 @@ class ContextEmbedder(Initializable):
 
 
 def _transpose(data):
-    return tuple(array.T for array in data)
+    return tuple(array.T if array.ndim == 2 else array.transpose(1, 0, 2) for array in data)
 
 
 def _is_nan(log):
@@ -154,8 +164,10 @@ def train(embedder, dataset, num_batches, save_path, step_rule='original'):
     data_stream = dataset.get_example_stream()
     # data_stream = Filter(data_stream, _filter_long)
     # data_stream = Batch(data_stream, iteration_scheme=ConstantScheme(10))
-    data_stream = Padding(data_stream, mask_sources=['chars', 'word_mask', 'pos'])
-    data_stream = FilterSources(data_stream, sources=['chars', 'chars_mask', 'word_mask', 'pos'])
+    data_stream = Padding(data_stream)
+    data_stream = FilterSources(data_stream, sources=('hist', 'hist_word_mask',
+                                                      'norm', 'norm_word_mask',
+                                                      'prediction_truth'))
     data_stream = Mapping(data_stream, _transpose)
 
     # Initialization settings
@@ -164,11 +176,11 @@ def train(embedder, dataset, num_batches, save_path, step_rule='original'):
     embedder.push_initialization_config()
 
     # Build the cost computation graph
-    hist = tensor.lmatrix("chars")
-    hist_mask = tensor.matrix("hist_mask")
+    hist = tensor.lmatrix("hist")
+    hist_mask = tensor.matrix("hist_word_mask")
     norm = tensor.lmatrix("norm")
-    norm_mask = tensor.matrix("norm_mask")
-    prediction_truth = tensor.matrix("prediction_truth")
+    norm_mask = tensor.matrix("norm_word_mask")
+    prediction_truth = tensor.tensor3("prediction_truth")
     batch_cost = embedder.cost(hist, hist_mask, norm, norm_mask, prediction_truth).sum()
     batch_size = hist.shape[1].copy(name="batch_size")
     cost = aggregation.mean(batch_cost, batch_size)
@@ -277,7 +289,17 @@ def main():
     with open(args.traincorpus, 'r') as f:
         dataset, chars_voc = load_training(f)
 
-    tagger = ContextEmbedder(len(chars_voc), 100, 101, args.recurrent_type, 1.0, chars_voc[' '], name="tagger")
+    dimension = 100
+    if args.recurrent_type == 'rnn':
+        transition = SimpleRecurrent(activation=Tanh(), dim=dimension)
+    elif args.recurrent_type == 'lstm':
+        transition = LSTM(dim=dimension)
+    elif args.recurrent_type == 'gru':
+        transition = GatedRecurrent(dim=dimension)
+    else:
+        raise ValueError('Unknown transition type: ' + args.recurrent_type)
+
+    tagger = ContextEmbedder(len(chars_voc), 100, 101, transition, 1.0, chars_voc[' '], name="tagger")
 
     if args.mode == "train":
         num_batches = args.num_batches
