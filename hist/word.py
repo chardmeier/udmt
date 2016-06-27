@@ -314,7 +314,7 @@ class Decoder(Initializable):
         else:
             attention = None
             readout_sources = [transition.apply.states[0]]
-            wrapped_transition = EncDecRecurrent(transition, dimension)
+            wrapped_transition = EncDecRecurrent(transition, 2 * dimension)
 
         readout = Readout(
             readout_dim=alphabet_size,
