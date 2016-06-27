@@ -58,7 +58,6 @@ def load_training(infile, chars_voc=None):
     all_norm_word_mask = []
     all_prediction_truth = []
     for snt_pairs in seqs:
-        snt_pairs = [l.rstrip('\n').split('\t') for l in group]
         hist_chars = [chars_voc['<S>']]
         norm_chars = [chars_voc['<S>']]
         hist_word_mask = [one]
@@ -239,32 +238,7 @@ def train(embedder, dataset, num_batches, save_path, step_rule='original'):
             # Saving the model and the log separately is convenient,
             # because loading the whole pickle takes quite some time.
             Checkpoint(save_path, every_n_batches=500,
-                       save_separately=["mo            snt_pairs = [l.rstrip('\n').split('\t') for l in group]
-            hist_chars = [chars_voc['<S>']]
-            norm_chars = [chars_voc['<S>']]
-            hist_word_mask = [one]
-            norm_word_mask = [one]
-            prediction_truth = numpy.zeros((len(snt_pairs), len(chars_voc)), dtype=fuel.config.floatX)
-            for i, (hist, norm) in enumerate(snt_pairs):
-                hist_word = list(chars_voc.get(c, chars_voc['<UNK>']) for c in hist)
-                hist_chars.extend(hist_word)
-                hist_chars.append(chars_voc[' '])
-                hist_word_mask.extend([zero] * len(hist) + [one])
-                norm_word = list(chars_voc.get(c, chars_voc['<UNK>']) for c in norm)
-                norm_chars.extend(norm_word)
-                norm_chars.append(chars_voc[' '])
-                norm_word_mask.extend([zero] * len(norm) + [one])
-                prediction_truth[i, norm_word] = one
-            hist_chars.append(chars_voc['</S>'])
-            norm_chars.append(chars_voc['</S>'])
-            hist_word_mask.append(one)
-            norm_word_mask.append(one)
-
-            all_hist.append(hist_chars)
-            all_norm.append(norm_chars)
-            all_hist_word_mask.append(hist_word_mask)
-            all_norm_word_mask.append(norm_word_mask)
-            all_prediction_truth.append(prediction_truth)del", "log"]),
+                       save_separately=["model", "log"]),
             Printing(every_n_batches=25)])
     main_loop.run()
 
