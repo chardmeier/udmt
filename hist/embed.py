@@ -97,6 +97,32 @@ def load_training(infile, chars_voc=None):
     return IndexableDataset(data), chars_voc
 
 
+def text_to_dataset(sentences, chars_voc):
+    floatx_vals = numpy.arange(2, dtype=fuel.config.floatX)
+    zero = floatx_vals[0]
+    one = floatx_vals[1]
+
+    all_chars = []
+    all_word_mask = []
+    for snt in sentences:
+        snt_chars = [chars_voc['<S>']]
+        snt_word_mask = [one]
+        for word in snt:
+            snt_chars.extend(chars_voc.get(c, chars_voc['<UNK>']) for c in word)
+            snt_chars.append(chars_voc[' '])
+            snt_word_mask.extend([zero] * len(word) + [one])
+        snt_chars[-1] = chars_voc['</S>']
+
+        all_chars.append(snt_chars)
+        all_word_mask.append(snt_word_mask)
+
+    data = collections.OrderedDict()
+    data['chars'] = all_chars
+    data['word_mask'] = all_word_mask
+
+    return IndexableDataset(data)
+
+
 class ContextEmbedder(Initializable):
     def __init__(self, alphabet_size, dimension, hidden_size, transition,
                  prediction_weight, word_boundary, **kwargs):
