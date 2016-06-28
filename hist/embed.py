@@ -144,9 +144,9 @@ class ContextEmbedder(Initializable):
 
         return diff_cost + self.prediction_weight * pred_cost
 
-    @application
-    def embed(self, chars, chars_mask):
-        return self.encoder.apply(chars, chars_mask)
+    @application(inputs=['chars', 'word_mask'], outputs=['embeddings', 'collected_mask'])
+    def embed(self, chars, word_mask):
+        return self.encoder.apply(chars, word_mask)
 
 
 def _transpose(data):
@@ -253,6 +253,35 @@ def train(embedder, dataset, num_batches, save_path, step_rule='original'):
                        save_separately=["model", "log"]),
             Printing(every_n_batches=25)])
     main_loop.run()
+
+
+def embed(embedder, dataset, save_path):
+    data_stream = dataset.get_example_stream()
+    data_stream = Batch(data_stream, iteration_scheme=ConstantScheme(50))
+    data_stream = FilterSources(data_stream, sources=('chars', 'word_mask'))
+    data_stream = Padding(data_stream)
+    data_stream = FilterSources(data_stream, sources=('chars', 'word_mask'))
+    data_stream = Mapping(data_stream, _transpose)
+
+    chars = tensor.lmatrix('chars')
+    chars_mask = tensor.matrix('chars_mask')
+    embeddings, out_mask = embedder.embed(chars, chars_mask)
+
+    model = Model(embeddings, out_mask)
+    with open(save_path, 'rb') as f:
+        model.set_parameter_values(load_parameters(f))
+
+    embed_fn = theano.function(inputs=[chars, chars_mask], outputs=[embeddings, out_mask])
+
+    embed_dim = embedder.get_dim('embeddings')
+
+    out = []
+    for i_chars, i_word_mask in data_stream.get_epoch_iterator():
+        o_embed, o_collected_mask = embed_fn(i_chars, i_word_mask)
+        for sntno in range(o_embed.shape[1]):
+            out.append(o_embed[o_collected_mask[:, sntno], sntno, :])
+
+    return out
 
 
 def main():
