@@ -304,7 +304,7 @@ def embed(embedder, dataset, save_path):
     for i_chars, i_word_mask in data_stream.get_epoch_iterator():
         o_embed, o_collected_mask = embed_fn(i_chars, i_word_mask)
         for sntno in range(o_embed.shape[1]):
-            out.append(o_embed[o_collected_mask[:, sntno], sntno, :])
+            out.append(o_embed[o_collected_mask[:, sntno] > 0, sntno, :])
 
     return out
 

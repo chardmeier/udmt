@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 
 def _transpose(data):
-    return tuple(array.T for array in data)
+    return tuple(array.T if array.ndim == 2 else array.transpose(1, 0, 2) for array in data)
 
 
 def _is_nan(log):
@@ -270,7 +270,7 @@ def main():
              " In the `predict` mode a trained model is "
              " to used to tag the input text.")
     parser.add_argument(
-        "model",
+        "taggermodel",
         help="The path to save the training process if the mode"
              " is `train` OR path to an `.tar` files with learned"
              " parameters if the mode is `predict`.")
@@ -303,10 +303,10 @@ def main():
     with open(args.postrain, 'r') as f:
         text_ds, pos, pos_voc = load_conll(f, chars_voc=chars_voc)
 
-    embedding_dim = 99
-    tagger_dim = 100
+    embedding_dim = 100
+    tagger_dim = 101
 
-    hidden_dim = 100
+    hidden_dim = 101
 
     if args.recurrent_type == 'rnn':
         embedder_transition = SimpleRecurrent(activation=Tanh(), dim=embedding_dim)
@@ -317,7 +317,9 @@ def main():
     else:
         raise ValueError('Unknown transition type: ' + args.recurrent_type)
 
-    embedder = ContextEmbedder(len(chars_voc), embedding_dim, hidden_dim, embedder_transition, 0.0, chars_voc[' '])
+    # TODO: Name of ContextEmbedder brick should be changed here and in embed.py.
+    embedder = ContextEmbedder(len(chars_voc), embedding_dim, hidden_dim, embedder_transition, 0.0, chars_voc[' '],
+                               name="tagger")
     tagger = PreembeddedPOSTagger(embedding_dim, tagger_dim, len(pos_voc), args.recurrent_type, name="tagger")
 
     if args.mode == "train":
@@ -327,7 +329,7 @@ def main():
         train_data['embeddings'] = text_enc
         train_data['pos'] = pos
         train_ds = IndexableDataset(train_data)
-        train(tagger, train_ds, num_batches, args.tagger_model, step_rule=args.step_rule)
+        train(tagger, train_ds, num_batches, args.taggermodel, step_rule=args.step_rule)
     elif args.mode == "predict":
         with open(args.test_file, 'r') if args.test_file is not None else sys.stdin as f:
             text_ds = load_vertical(f, chars_voc)
@@ -335,7 +337,7 @@ def main():
         test_data = collections.OrderedDict()
         test_data['embeddings'] = test_enc
         test_ds = IndexableDataset(test_data)
-        predict(tagger, test_ds, args.model, pos_voc)
+        predict(tagger, test_ds, args.taggermodel, pos_voc)
     elif args.mode == "eval":
         with open(args.test_file, 'r') if args.test_file is not None else sys.stdin as f:
             text_ds, pos, _ = load_conll(f, pos_voc=pos_voc)
@@ -344,7 +346,7 @@ def main():
         test_data['embeddings'] = test_enc
         test_data['pos'] = pos
         test_ds = IndexableDataset(test_data)
-        evaluate(tagger, test_ds, args.model, pos_voc)
+        evaluate(tagger, test_ds, args.taggermodel, pos_voc)
 
 
 if __name__ == '__main__':
