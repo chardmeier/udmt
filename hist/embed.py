@@ -117,6 +117,7 @@ def text_to_dataset(sentences, chars_voc):
         all_word_mask.append(snt_word_mask)
 
     data = collections.OrderedDict()
+    data['words'] = sentences
     data['chars'] = all_chars
     data['word_mask'] = all_word_mask
 
