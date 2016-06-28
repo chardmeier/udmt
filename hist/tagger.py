@@ -207,6 +207,36 @@ class POSTagger(Initializable):
         return self.decoder.apply(self.link.apply(self.encoder.apply(chars, char_mask)), mask=word_mask)
 
 
+class PreembeddedPOSTagger(Initializable):
+    def __init__(self, embedding_dimension, word_dimension, pos_dimension,
+                 transition_type, **kwargs):
+        super().__init__(**kwargs)
+
+        if transition_type == 'rnn':
+            transition = SimpleRecurrent(activation=Tanh(), dim=word_dimension)
+        elif transition_type == 'lstm':
+            transition = LSTM(dim=word_dimension)
+        elif transition_type == 'gru':
+            transition = GatedRecurrent(dim=word_dimension)
+        else:
+            raise ValueError('Unknown transition type: ' + transition_type)
+
+        link = Linear(input_dim=embedding_dimension, output_dim=word_dimension)
+        decoder = TagDecoder(word_dimension, pos_dimension, transition, make_merge_combiner(word_dimension))
+
+        self.link = link
+        self.decoder = decoder
+        self.children = [link, decoder]
+
+    @application
+    def cost(self, embeddings, mask, targets):
+        return self.decoder.cost(self.link.apply(embeddings), targets, mask=mask)
+
+    @application
+    def apply(self, embeddings, mask):
+        return self.decoder.apply(self.link.apply(embeddings), mask=mask)
+
+
 def _transpose(data):
     return tuple(array.T for array in data)
 
