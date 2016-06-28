@@ -294,13 +294,11 @@ def embed(embedder, dataset, save_path):
     chars_mask = tensor.matrix('chars_mask')
     embeddings, out_mask = embedder.embed(chars, chars_mask)
 
-    model = Model(embeddings, out_mask)
+    model = Model([embeddings, out_mask])
     with open(save_path, 'rb') as f:
         model.set_parameter_values(load_parameters(f))
 
     embed_fn = theano.function(inputs=[chars, chars_mask], outputs=[embeddings, out_mask])
-
-    embed_dim = embedder.get_dim('embeddings')
 
     out = []
     for i_chars, i_word_mask in data_stream.get_epoch_iterator():
