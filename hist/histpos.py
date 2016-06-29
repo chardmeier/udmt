@@ -222,8 +222,8 @@ def evaluate(postagger, dataset, save_path, pos_voc):
     pred_table = numpy.zeros((npos,))
     hit_table = numpy.zeros((npos,))
 
-    for i_chars, i_chars_mask, i_word_mask, i_pos_idx in data_stream.get_epoch_iterator():
-        o_pos, o_mask = tag_fn(i_chars, i_chars_mask, i_word_mask)
+    for i_embeddings, i_embeddings_mask, i_pos_idx in data_stream.get_epoch_iterator():
+        o_pos, o_mask = tag_fn(i_embeddings, i_embeddings_mask)
         o_pos_idx = numpy.argmax(o_pos, axis=-1)
 
         # total += o_mask.sum()
