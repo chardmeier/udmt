@@ -386,8 +386,8 @@ class WordTransformer(Initializable):
         chars_mask = tensor.ones(chars.shape)
         return self.decoder.generate(
             n_steps=3 * chars.shape[0], batch_size=chars.shape[1],
-            attended=self.encoder.apply(chars, chars_mask),
-            attended_mask=chars_mask)
+            encoded=self.encoder.apply(chars, chars_mask),
+            encoded_mask=chars_mask)
 
 
 def train(transformer, dataset, num_batches, save_path, step_rule='original'):
