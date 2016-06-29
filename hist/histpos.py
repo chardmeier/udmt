@@ -340,7 +340,7 @@ def main():
         predict(tagger, test_ds, args.taggermodel, pos_voc)
     elif args.mode == "eval":
         with open(args.test_file, 'r') if args.test_file is not None else sys.stdin as f:
-            text_ds, pos, _ = load_conll(f, pos_voc=pos_voc)
+            text_ds, pos, _ = load_conll(f, chars_voc, pos_voc=pos_voc)
         test_enc = embed(embedder, text_ds, args.embedmodel)
         test_data = collections.OrderedDict()
         test_data['embeddings'] = test_enc
