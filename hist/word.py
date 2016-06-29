@@ -507,7 +507,7 @@ def predict(transformer, mode, save_path, voc):
         model.set_parameter_values(load_parameters(f))
 
     sample_expr, = VariableFilter(
-        applications=[transformer.generator.generate], name="outputs")(
+        applications=[transformer.decoder.generator.generate], name="outputs")(
         ComputationGraph(generated[1]))
     beam_search = BeamSearch(sample_expr)
 
