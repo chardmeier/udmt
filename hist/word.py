@@ -496,7 +496,7 @@ def train(transformer, dataset, num_batches, save_path, step_rule='original'):
     main_loop.run()
 
 
-def predict(transformer, mode, save_path, voc):
+def predict(infile, transformer, mode, save_path, voc):
     reverse_voc = {idx: word for word, idx in voc.items()}
 
     raw = tensor.lmatrix("input")
@@ -546,7 +546,7 @@ def predict(transformer, mode, save_path, voc):
         return outputs, costs
 
     batch_size = 50
-    for fline in sys.stdin:
+    for fline in infile:
         line, target = tuple(fline.rstrip('\n').split('\t'))
 
         encoded_input = [voc.get(char, voc["<UNK>"])
@@ -609,6 +609,9 @@ def main():
     parser.add_argument(
         "--disable-attention", dest='use_attention', action='store_false',
         help="Use encoder/decoder configuration instead of attention mechanism")
+    parser.add_argument(
+        "--test-file", required=False,
+        help="The file to test on in prediction mode")
     parser.set_defaults(autoencoder=False)
     args = parser.parse_args()
 
@@ -621,7 +624,8 @@ def main():
         num_batches = args.num_batches
         train(transformer, dataset, num_batches, args.model, step_rule=args.step_rule)
     elif args.mode == "sample" or args.mode == "beam_search":
-        predict(transformer, args.mode, args.model, voc)
+        with open(args.test_file, 'r') if args.test_file is not None else sys.stdin as f:
+            predict(f, transformer, args.mode, args.model, voc)
 
 
 if __name__ == '__main__':
