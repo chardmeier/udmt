@@ -150,7 +150,7 @@ class BidirectionalLayer(Initializable):
     def apply(self, input_, **kwargs):
         return self.sequence.apply(
             **dict_union(
-                self.fork.apply(self.lookup.apply(input_), as_dict=True),
+                self.fork.apply(input_, as_dict=True),
                 kwargs))
 
     @apply.delegate
@@ -196,10 +196,10 @@ class WordEmbedding(Initializable):
 
     @application(inputs=['chars', 'chars_mask', 'word_mask'], outputs=['output', 'mask'])
     def apply(self, chars, chars_mask, word_mask):
-        state = self.lookup.apply(chars, as_dict=True)
+        state = self.lookup.apply(chars)
         for seq in self.sequences:
-            state = seq.apply(**dict_union(state, mask=chars_mask), as_dict=True)
-        return self.final_sequence.apply(state, word_mask)
+            state = seq.apply(state, mask=chars_mask)
+        return self.final_sequence.apply(state, mask=word_mask)
 
 
 class TagPredictor(Initializable):
