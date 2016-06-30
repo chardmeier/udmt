@@ -1,6 +1,7 @@
 from blocks.algorithms import (GradientDescent, Scale,
                                StepClipping, CompositeRule, RMSProp, Adam, Momentum, AdaGrad)
 from blocks.bricks import application, Initializable, Linear, NDimensionalSoftmax, Tanh
+from blocks.bricks.lookup import LookupTable
 from blocks.bricks.parallel import Fork, Merge
 from blocks.bricks.recurrent import GatedRecurrent, LSTM, SimpleRecurrent
 from blocks.extensions import FinishAfter, Printing, Timing
@@ -17,7 +18,7 @@ from dependency import conll_trees
 from fuel.transformers import Batch, FilterSources, Mapping, Padding
 from fuel.datasets import IndexableDataset
 from fuel.schemes import ConstantScheme, ShuffledScheme
-from hist.word import BidirectionalWithCombination, CombineWords, Encoder
+from hist.word import BidirectionalWithCombination, CombineWords
 from theano import tensor
 
 import argparse
@@ -123,43 +124,6 @@ def load_vertical(infile, chars_voc):
     return IndexableDataset(data)
 
 
-class TagDecoder(Initializable):
-    def __init__(self, seq_dimension, pos_dimension, transition, combiner, **kwargs):
-        super().__init__(**kwargs)
-
-        sequence = BidirectionalWithCombination(weights_init=Orthogonal(),
-                                                prototype=transition,
-                                                combiner=CombineWords(combiner),
-                                                name='pos_sequence')
-        fork = Fork([name for name in sequence.apply.sequences if name != 'mask'])
-        fork.input_dim = seq_dimension
-        fork.output_dims = [sequence.get_dim(name) for name in fork.input_names]
-
-        linear = Linear(input_dim=seq_dimension, output_dim=pos_dimension)
-
-        softmax = NDimensionalSoftmax(name='pos_softmax')
-
-        self.fork = fork
-        self.sequence = sequence
-        self.linear = linear
-        self.softmax = softmax
-        self.children = [sequence, fork, linear, softmax]
-
-    @application
-    def cost(self, word_enc, targets, mask=None):
-        predictions, out_mask = self.apply(word_enc, mask)
-        widx, exmpl = tensor.nonzero(out_mask)
-        tgtidx = targets[widx, exmpl]
-        crossentropy = -tensor.sum(tensor.log(predictions[widx, exmpl, tgtidx]))
-        return crossentropy
-
-    @application(outputs=['output', 'mask'])
-    def apply(self, word_enc, mask=None):
-        context_enc, collected_mask = self.sequence.apply(
-            **dict_union(self.fork.apply(word_enc, as_dict=True), mask=mask))
-        return self.softmax.apply(self.linear.apply(context_enc), extra_ndim=1), collected_mask
-
-
 def make_merge_combiner(dimension):
     combiner = Merge(input_names=['forward', 'backward'], input_dims=[dimension] * 2,
                      output_dim=dimension, weights_init=IsotropicGaussian(0.1),
@@ -169,72 +133,119 @@ def make_merge_combiner(dimension):
     return combiner
 
 
+class BidirectionalLayer(Initializable):
+    def __init__(self, dimension, prototype, combiner, **kwargs):
+        super().__init__(**kwargs)
+        sequence = BidirectionalWithCombination(prototype=prototype, combiner=combiner)
+        fork = Fork([name for name in prototype.apply.sequences
+                     if name != 'mask'])
+        fork.input_dim = dimension
+        fork.output_dims = [prototype.get_dim(name) for name in fork.input_names]
+
+        self.sequence = sequence
+        self.fork = fork
+        self.children = [sequence, fork]
+
+    @application
+    def apply(self, input_, **kwargs):
+        return self.sequence.apply(
+            **dict_union(
+                self.fork.apply(self.lookup.apply(input_), as_dict=True),
+                kwargs))
+
+    @apply.delegate
+    def apply_delegate(self):
+        return self.sequence
+
+
+class WordEmbedding(Initializable):
+    def __init__(self, alphabet_size, dimensions, transition_type, **kwargs):
+        super().__init__(**kwargs)
+
+        if transition_type == 'rnn':
+            transitions = [SimpleRecurrent(activation=Tanh(), dim=dim)
+                           for dim in dimensions[1:]]
+        elif transition_type == 'lstm':
+            transitions = [LSTM(dim=dim)
+                           for dim in dimensions[1:]]
+        elif transition_type == 'gru':
+            transitions = [GatedRecurrent(dim=dim)
+                           for dim in dimensions[1:]]
+        else:
+            raise ValueError('Unknown transition type: ' + transition_type)
+
+        lookup = LookupTable(alphabet_size, dimensions[0])
+        sequences = []
+        for i, (input_dim, output_dim, transition) in enumerate(zip(dimensions, dimensions[1:], transitions[:-1])):
+            sequences.append(BidirectionalLayer(input_dim,
+                                                weights_init=Orthogonal(),
+                                                prototype=transition,
+                                                combiner=make_merge_combiner(output_dim),
+                                                name='sequence%d' % i))
+
+        final_sequence = BidirectionalLayer(dimensions[-2],
+                                            weights_init=Orthogonal(),
+                                            prototype=transitions[-1],
+                                            combiner=CombineWords(make_merge_combiner(dimensions[-1])),
+                                            name='sequence_final')
+
+        self.lookup = lookup
+        self.sequences = sequences
+        self.final_sequence = final_sequence
+        self.children = sequences + [final_sequence, lookup]
+
+    @application(inputs=['chars', 'chars_mask', 'word_mask'], outputs=['output', 'mask'])
+    def apply(self, chars, chars_mask, word_mask):
+        state = self.lookup.apply(chars, as_dict=True)
+        for seq in self.sequences:
+            state = seq.apply(**dict_union(state, mask=chars_mask), as_dict=True)
+        return self.final_sequence.apply(state, word_mask)
+
+
+class TagPredictor(Initializable):
+    def __init__(self, seq_dimension, pos_dimension, **kwargs):
+        super().__init__(**kwargs)
+        linear = Linear(input_dim=seq_dimension, output_dim=pos_dimension)
+        softmax = NDimensionalSoftmax()
+
+        self.linear = linear
+        self.softmax = softmax
+        self.children = [linear, softmax]
+
+    @application
+    def cost(self, word_enc, mask, targets):
+        predictions = self.apply(word_enc)
+        widx, exmpl = tensor.nonzero(mask)
+        tgtidx = targets[widx, exmpl]
+        crossentropy = -tensor.sum(tensor.log(predictions[widx, exmpl, tgtidx]))
+        return crossentropy
+
+    @application
+    def apply(self, word_enc):
+        return self.softmax.apply(self.linear.apply(word_enc), extra_ndim=1)
+
+
 class POSTagger(Initializable):
     def __init__(self, alphabet_size, char_dimension, word_dimension, pos_dimension,
                  transition_type, **kwargs):
         super().__init__(**kwargs)
 
-        recurrent_dims = [char_dimension, word_dimension]
+        embedder = WordEmbedding(alphabet_size, [char_dimension, char_dimension, word_dimension], transition_type)
+        predictor = TagPredictor(word_dimension, pos_dimension)
 
-        if transition_type == 'rnn':
-            transitions = [SimpleRecurrent(activation=Tanh(), dim=dim)
-                           for dim in recurrent_dims]
-        elif transition_type == 'lstm':
-            transitions = [LSTM(dim=dim)
-                           for dim in recurrent_dims]
-        elif transition_type == 'gru':
-            transitions = [GatedRecurrent(dim=dim)
-                           for dim in recurrent_dims]
-        else:
-            raise ValueError('Unknown transition type: ' + transition_type)
-
-        encoder = Encoder(alphabet_size, char_dimension, transitions[0], make_merge_combiner(char_dimension))
-        link = Linear(input_dim=char_dimension, output_dim=word_dimension)
-        decoder = TagDecoder(word_dimension, pos_dimension, transitions[1], make_merge_combiner(word_dimension))
-
-        self.encoder = encoder
-        self.link = link
-        self.decoder = decoder
-        self.children = [encoder, link, decoder]
+        self.embedder = embedder
+        self.predictor = predictor
+        self.children = [embedder, predictor]
 
     @application
-    def cost(self, chars, char_mask, word_mask, targets):
-        return self.decoder.cost(self.link.apply(self.encoder.apply(chars, char_mask)),
-                                 targets, mask=word_mask)
+    def cost(self, chars, chars_mask, word_mask, targets):
+        encoded, collected_mask = self.embedder.apply(chars, chars_mask, word_mask)
+        return self.predictor.cost(encoded, collected_mask, targets)
 
     @application
-    def apply(self, chars, char_mask, word_mask):
-        return self.decoder.apply(self.link.apply(self.encoder.apply(chars, char_mask)), mask=word_mask)
-
-
-class PreembeddedPOSTagger(Initializable):
-    def __init__(self, embedding_dimension, word_dimension, pos_dimension,
-                 transition_type, **kwargs):
-        super().__init__(**kwargs)
-
-        if transition_type == 'rnn':
-            transition = SimpleRecurrent(activation=Tanh(), dim=word_dimension)
-        elif transition_type == 'lstm':
-            transition = LSTM(dim=word_dimension)
-        elif transition_type == 'gru':
-            transition = GatedRecurrent(dim=word_dimension)
-        else:
-            raise ValueError('Unknown transition type: ' + transition_type)
-
-        link = Linear(input_dim=embedding_dimension, output_dim=word_dimension)
-        decoder = TagDecoder(word_dimension, pos_dimension, transition, make_merge_combiner(word_dimension))
-
-        self.link = link
-        self.decoder = decoder
-        self.children = [link, decoder]
-
-    @application
-    def cost(self, embeddings, mask, targets):
-        return self.decoder.cost(self.link.apply(embeddings), targets, mask=mask)
-
-    @application
-    def apply(self, embeddings, mask):
-        return self.decoder.apply(self.link.apply(embeddings), mask=mask)
+    def apply(self, chars, chars_mask, word_mask):
+        encoded, collected_mask = self.embedder.apply(chars, chars_mask, word_mask)
+        return self.predictor.apply(encoded)
 
 
 def _transpose(data):
@@ -252,8 +263,8 @@ def train(postagger, dataset, num_batches, save_path, step_rule='original'):
     data_stream = dataset.get_example_stream()
     # data_stream = Filter(data_stream, _filter_long)
     # data_stream = Batch(data_stream, iteration_scheme=ConstantScheme(10))
-    data_stream = Padding(data_stream, mask_sources=['chars', 'word_mask', 'pos'])
-    data_stream = FilterSources(data_stream, sources=['chars', 'chars_mask', 'word_mask', 'pos'])
+    data_stream = Padding(data_stream, mask_sources=('chars', 'word_mask', 'pos'))
+    data_stream = FilterSources(data_stream, sources=('chars', 'chars_mask', 'word_mask', 'pos'))
     data_stream = Mapping(data_stream, _transpose)
 
     # Initialization settings
@@ -343,9 +354,9 @@ def train(postagger, dataset, num_batches, save_path, step_rule='original'):
 def predict(postagger, dataset, save_path, pos_voc):
     data_stream = dataset.get_example_stream()
     data_stream = Batch(data_stream, iteration_scheme=ConstantScheme(50))
-    data_stream = FilterSources(data_stream, sources=['words', 'chars', 'word_mask'])
-    data_stream = Padding(data_stream, mask_sources=['chars', 'word_mask'])
-    data_stream = FilterSources(data_stream, sources=['words', 'chars', 'chars_mask', 'word_mask'])
+    data_stream = FilterSources(data_stream, sources=('words', 'chars', 'word_mask'))
+    data_stream = Padding(data_stream, mask_sources=('chars', 'word_mask'))
+    data_stream = FilterSources(data_stream, sources=('words', 'chars', 'chars_mask', 'word_mask'))
     data_stream = Mapping(data_stream, _transpose)
 
     chars = tensor.lmatrix('chars')
@@ -376,9 +387,9 @@ def predict(postagger, dataset, save_path, pos_voc):
 def evaluate(postagger, dataset, save_path, pos_voc):
     data_stream = dataset.get_example_stream()
     data_stream = Batch(data_stream, iteration_scheme=ConstantScheme(50))
-    data_stream = FilterSources(data_stream, sources=['chars', 'word_mask', 'pos'])
+    data_stream = FilterSources(data_stream, sources=('chars', 'word_mask', 'pos'))
     data_stream = Padding(data_stream, mask_sources=['chars', 'word_mask', 'pos'])
-    data_stream = FilterSources(data_stream, sources=['chars', 'chars_mask', 'word_mask', 'pos'])
+    data_stream = FilterSources(data_stream, sources=('chars', 'chars_mask', 'word_mask', 'pos'))
     data_stream = Mapping(data_stream, _transpose)
 
     chars = tensor.lmatrix('chars')
