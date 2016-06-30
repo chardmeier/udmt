@@ -55,7 +55,15 @@ class HistPOSTagger(Initializable):
 
         norm_encoded, norm_collected_mask = self.embedder.apply(norm_chars, norm_chars_mask, norm_word_mask)
         hist_encoded, hist_collected_mask = self.embedder.apply(hist_chars, hist_chars_mask, hist_word_mask)
-        diff_cost = (hist_collected_mask * tensor.sqr(norm_encoded - hist_encoded).sum(axis=2)).sum(axis=0).mean()
+
+        # Input char sequences can have different length, but the number of words should always be the same.
+        # Trim the matrices to the same size.
+        min_length = tensor.minimum(norm_encoded.shape[0], hist_encoded.shape[0])
+        collected_mask = hist_collected_mask[0:min_length, :]
+        norm_enc_trunc = norm_encoded[0:min_length, :]
+        hist_enc_trunc = hist_encoded[0:min_length, :]
+
+        diff_cost = (collected_mask * tensor.sqr(norm_enc_trunc - hist_enc_trunc).sum(axis=2)).sum(axis=0).mean()
 
         return pos_cost, diff_cost
 
@@ -184,8 +192,8 @@ def load_historical(infile, chars_voc=None):
 
 
 def join_training_data(pos_data, hist_data):
-    pos_size = len(pos_data[0])
-    hist_size = len(hist_data[0])
+    pos_size = len(list(pos_data.values())[0])
+    hist_size = len(list(hist_data.values())[0])
     max_size = max(pos_size, hist_size)
 
     pos_sample = numpy.random.choice(pos_size, size=max_size, replace=True)
@@ -226,7 +234,7 @@ def train(pos_weight, postagger, dataset, num_batches, save_path, step_rule='ori
     pos_chars = tensor.lmatrix('pos_chars')
     pos_chars_mask = tensor.matrix('pos_chars_mask')
     pos_word_mask = tensor.matrix('pos_word_mask')
-    pos_targets = tensor.matrix('pos_targets')
+    pos_targets = tensor.lmatrix('pos_targets')
     norm_chars = tensor.lmatrix('norm_chars')
     norm_chars_mask = tensor.matrix('norm_chars_mask')
     norm_word_mask = tensor.matrix('norm_word_mask')
@@ -234,10 +242,9 @@ def train(pos_weight, postagger, dataset, num_batches, save_path, step_rule='ori
     hist_chars_mask = tensor.matrix('hist_chars_mask')
     hist_word_mask = tensor.matrix('hist_word_mask')
 
-    pos_cost, diff_cost = postagger.cost(pos_weight,
-                                         pos_chars, pos_chars_mask, pos_word_mask, pos_targets,
+    pos_cost, diff_cost = postagger.cost(pos_chars, pos_chars_mask, pos_word_mask, pos_targets,
                                          norm_chars, norm_chars_mask, norm_word_mask,
-                                         hist_chars, hist_chars_mask, hist_word_mask).sum()
+                                         hist_chars, hist_chars_mask, hist_word_mask)
     batch_cost = pos_weight * pos_cost + (1.0 - pos_weight) * diff_cost
     batch_size = pos_chars.shape[1].copy(name="batch_size")
     cost = aggregation.mean(batch_cost, batch_size)
