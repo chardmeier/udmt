@@ -334,14 +334,14 @@ class Decoder(Initializable):
         self.generator.transition.weights_init = Orthogonal()
 
     @application
-    def cost(self, encoded, encoded_mask, targets, targets_mask):
-        return self.generator.cost_matrix(targets, targets_mask, attended=encoded, attended_mask=encoded_mask)
+    def cost(self, attended, attended_mask, targets, targets_mask):
+        return self.generator.cost_matrix(targets, targets_mask, attended=attended, attended_mask=attended_mask)
 
     @application
-    def generate(self, encoded, encoded_mask, n_steps, batch_size):
+    def generate(self, attended, attended_mask, n_steps, batch_size):
         return self.generator.generate(
             n_steps=n_steps, batch_size=batch_size,
-            attended=encoded, attended_mask=encoded_mask)
+            attended=attended, attended_mask=attended_mask)
 
 
 class WordTransformer(Initializable):
@@ -386,8 +386,8 @@ class WordTransformer(Initializable):
         chars_mask = tensor.ones(chars.shape)
         return self.decoder.generate(
             n_steps=3 * chars.shape[0], batch_size=chars.shape[1],
-            encoded=self.encoder.apply(chars, chars_mask),
-            encoded_mask=chars_mask)
+            attended=self.encoder.apply(chars, chars_mask),
+            attended_mask=chars_mask)
 
 
 def train(transformer, dataset, num_batches, save_path, step_rule='original'):
