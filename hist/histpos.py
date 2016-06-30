@@ -1,6 +1,6 @@
 from blocks.algorithms import (GradientDescent, Scale,
                                StepClipping, CompositeRule, RMSProp, Adam, Momentum, AdaGrad)
-from blocks.bricks import Tanh
+from blocks.bricks import application, Initializable, Tanh
 from blocks.bricks.recurrent import GatedRecurrent, LSTM, SimpleRecurrent
 from blocks.extensions import FinishAfter, Printing, Timing
 from blocks.extensions.monitoring import TrainingDataMonitoring
@@ -15,22 +15,54 @@ from dependency import conll_trees
 from fuel.transformers import Batch, FilterSources, Mapping, Padding
 from fuel.datasets import IndexableDataset
 from fuel.schemes import ConstantScheme, ShuffledScheme
-from hist.embed import embed, load_training, text_to_dataset, ContextEmbedder
-from hist.tagger import PreembeddedPOSTagger
+from hist.tagger import TagPredictor, WordEmbedding
 from theano import tensor
 
 import argparse
 import collections
+import fuel
 import itertools
 import logging
 import math
 import numpy
 import pprint
+import re
 import sys
 import theano
 
 
 logger = logging.getLogger(__name__)
+
+
+class HistPOSTagger(Initializable):
+    def __init__(self, alphabet_size, seq_dimensions, pos_dimension, transition_type, **kwargs):
+        super().__init__(**kwargs)
+
+        embedder = WordEmbedding(alphabet_size, seq_dimensions, transition_type)
+        predictor = TagPredictor(seq_dimensions[-1], pos_dimension)
+
+        self.embedder = embedder
+        self.predictor = predictor
+        self.children = [embedder, predictor]
+
+    @application
+    def cost(self,
+             pos_chars, pos_chars_mask, pos_word_mask, pos_targets,
+             norm_chars, norm_chars_mask, norm_word_mask,
+             hist_chars, hist_chars_mask, hist_word_mask):
+        pos_encoded, pos_collected_mask = self.embedder.apply(pos_chars, pos_chars_mask, pos_word_mask)
+        pos_cost = self.predictor.cost(pos_encoded, pos_collected_mask, pos_targets)
+
+        norm_encoded, norm_collected_mask = self.embedder.apply(norm_chars, norm_chars_mask, norm_word_mask)
+        hist_encoded, hist_collected_mask = self.embedder.apply(hist_chars, hist_chars_mask, hist_word_mask)
+        diff_cost = (hist_collected_mask * tensor.sqr(norm_encoded - hist_encoded).sum(axis=2)).sum(axis=0).mean()
+
+        return pos_cost, diff_cost
+
+    @application
+    def apply(self, chars, chars_mask, word_mask):
+        encoded, collected_mask = self.embedder.apply(chars, chars_mask, word_mask)
+        return self.predictor.apply(encoded)
 
 
 def _transpose(data):
@@ -41,24 +73,131 @@ def _is_nan(log):
     return math.isnan(log.current_row['total_gradient_norm'])
 
 
-def load_conll(infile, chars_voc, pos_voc=None):
-    tokens = []
-    pos = []
+def load_conll(infile, chars_voc=None, pos_voc=None):
+    seqs = []
     for tr in conll_trees(infile):
-        tokens.append([n.token for n in tr[1:]])
-        pos.append([n.pos for n in tr[1:]])
+        seqs.append([(n.token, n.pos) for n in tr[1:]])
+
+    if chars_voc is None:
+        chars = set(itertools.chain(*(t[0] for t in itertools.chain(*seqs))))
+        chars_voc = {c: i + 4 for i, c in enumerate(sorted(chars))}
+        chars_voc['<UNK>'] = 0
+        chars_voc['<S>'] = 1
+        chars_voc['</S>'] = 2
+        chars_voc[' '] = 3
 
     if pos_voc is None:
-        tags = set(t for t in itertools.chain(*pos))
+        tags = set(t[1] for t in itertools.chain(*seqs))
         pos_voc = {c: i + 3 for i, c in enumerate(sorted(tags))}
         pos_voc['<UNK>'] = 0
         pos_voc['<S>'] = 1
         pos_voc['</S>'] = 2
 
-    text_ds = text_to_dataset(tokens, chars_voc)
-    pos_enc = [[pos_voc['<S>']] + [pos_voc.get(t, pos_voc['<UNK>']) for t in snt] + [pos_voc['</S>']] for snt in pos]
+    floatx_vals = numpy.arange(2, dtype=fuel.config.floatX)
+    zero = floatx_vals[0]
+    one = floatx_vals[1]
 
-    return text_ds, pos_enc, pos_voc
+    words = []
+    chars = []
+    pos = []
+    word_mask = []
+    for snt in seqs:
+        snt_words = [word_tag[0] for word_tag in snt]
+        snt_chars = [chars_voc['<S>']]
+        snt_pos = [pos_voc['<S>']]
+        snt_word_mask = [one]
+        for word, postag in snt:
+            snt_chars.extend(chars_voc.get(c, chars_voc['<UNK>']) for c in word)
+            snt_chars.append(chars_voc[' '])
+            snt_word_mask.extend([zero] * len(word) + [one])
+            snt_pos.append(pos_voc.get(postag, pos_voc['<UNK>']))
+        snt_chars.append(chars_voc['</S>'])
+        snt_pos.append(pos_voc['</S>'])
+        snt_word_mask.append(one)
+
+        words.append(snt_words)
+        chars.append(snt_chars)
+        pos.append(snt_pos)
+        word_mask.append(snt_word_mask)
+
+    data = collections.OrderedDict()
+    data['pos_words'] = words
+    data['pos_chars'] = chars
+    data['pos_word_mask'] = word_mask
+    data['pos_targets'] = pos
+
+    return data, chars_voc, pos_voc
+
+
+def load_historical(infile, chars_voc=None):
+    floatx_vals = numpy.arange(2, dtype=fuel.config.floatX)
+    zero = floatx_vals[0]
+    one = floatx_vals[1]
+
+    empty_line = re.compile(r'\s*$')
+    seqs = []
+    for key, group in itertools.groupby(infile, lambda l: empty_line.match(l)):
+        if not key:
+            seqs.append([l.rstrip('\n').split('\t') for l in group])
+
+    if chars_voc is None:
+        chars = set(itertools.chain(*(t[0] + t[1] for t in itertools.chain(*seqs))))
+        chars_voc = {c: i + 4 for i, c in enumerate(sorted(chars))}
+        chars_voc['<UNK>'] = 0
+        chars_voc['<S>'] = 1
+        chars_voc['</S>'] = 2
+        chars_voc[' '] = 3
+
+    all_hist = []
+    all_norm = []
+    all_hist_word_mask = []
+    all_norm_word_mask = []
+    for snt_pairs in seqs:
+        hist_chars = [chars_voc['<S>']]
+        norm_chars = [chars_voc['<S>']]
+        hist_word_mask = [one]
+        norm_word_mask = [one]
+        for i, (hist, norm) in enumerate(snt_pairs):
+            hist_word = list(chars_voc.get(c, chars_voc['<UNK>']) for c in hist)
+            hist_chars.extend(hist_word)
+            hist_chars.append(chars_voc[' '])
+            hist_word_mask.extend([zero] * len(hist) + [one])
+            norm_word = list(chars_voc.get(c, chars_voc['<UNK>']) for c in norm)
+            norm_chars.extend(norm_word)
+            norm_chars.append(chars_voc[' '])
+            norm_word_mask.extend([zero] * len(norm) + [one])
+        hist_chars[-1] = chars_voc['</S>']
+        norm_chars[-1] = chars_voc['</S>']
+
+        all_hist.append(hist_chars)
+        all_norm.append(norm_chars)
+        all_hist_word_mask.append(hist_word_mask)
+        all_norm_word_mask.append(norm_word_mask)
+
+    data = collections.OrderedDict()
+    data['hist_chars'] = all_hist
+    data['hist_word_mask'] = all_hist_word_mask
+    data['norm_chars'] = all_norm
+    data['norm_word_mask'] = all_norm_word_mask
+
+    return data, chars_voc
+
+
+def join_training_data(pos_data, hist_data):
+    pos_size = len(pos_data[0])
+    hist_size = len(hist_data[0])
+    max_size = max(pos_size, hist_size)
+
+    pos_sample = numpy.random.choice(pos_size, size=max_size, replace=True)
+    hist_sample = numpy.random.choice(hist_size, size=max_size, replace=True)
+
+    all_data = collections.OrderedDict()
+    for key, val in pos_data.items():
+        all_data[key] = [val[i] for i in numpy.nditer(pos_sample)]
+    for key, val in hist_data.items():
+        all_data[key] = [val[i] for i in numpy.nditer(hist_sample)]
+
+    return IndexableDataset(all_data)
 
 
 def load_vertical(infile, chars_voc):
@@ -70,15 +209,21 @@ def load_vertical(infile, chars_voc):
     return text_to_dataset(tokens, chars_voc)
 
 
-def train(postagger, dataset, num_batches, save_path, step_rule='original'):
+def train(pos_weight, postagger, dataset, num_batches, save_path, step_rule='original'):
     # Data processing pipeline
 
-    dataset.example_iteration_scheme = ShuffledScheme(dataset.num_examples, 10)
+    # dataset.example_iteration_scheme = ShuffledScheme(dataset.num_examples, 10)
     data_stream = dataset.get_example_stream()
-    # data_stream = Filter(data_stream, _filter_long)
-    # data_stream = Batch(data_stream, iteration_scheme=ConstantScheme(10))
+    data_stream = Batch(data_stream, iteration_scheme=ConstantScheme(10))
+    data_stream = FilterSources(data_stream,
+                                sources=('pos_chars', 'pos_word_mask', 'pos_targets',
+                                         'norm_chars', 'norm_word_mask',
+                                         'hist_chars', 'hist_word_mask'))
     data_stream = Padding(data_stream)
-    data_stream = FilterSources(data_stream, sources=('embeddings', 'embeddings_mask', 'pos'))
+    data_stream = FilterSources(data_stream,
+                                sources=('pos_chars', 'pos_chars_mask', 'pos_word_mask', 'pos_targets',
+                                         'norm_chars', 'norm_chars_mask', 'norm_word_mask',
+                                         'hist_chars', 'hist_chars_mask', 'hist_word_mask'))
     data_stream = Mapping(data_stream, _transpose)
 
     # Initialization settings
@@ -87,11 +232,23 @@ def train(postagger, dataset, num_batches, save_path, step_rule='original'):
     postagger.push_initialization_config()
 
     # Build the cost computation graph
-    embeddings = tensor.tensor3("embeddings")
-    embeddings_mask = tensor.matrix("embeddings_mask")
-    pos = tensor.lmatrix("pos")
-    batch_cost = postagger.cost(embeddings, embeddings_mask, pos).sum()
-    batch_size = embeddings.shape[1].copy(name="batch_size")
+    pos_chars = tensor.lmatrix('pos_chars')
+    pos_chars_mask = tensor.matrix('pos_chars_mask')
+    pos_word_mask = tensor.matrix('pos_word_mask')
+    pos_targets = tensor.matrix('pos_targets')
+    norm_chars = tensor.lmatrix('norm_chars')
+    norm_chars_mask = tensor.matrix('norm_chars_mask')
+    norm_word_mask = tensor.matrix('norm_word_mask')
+    hist_chars = tensor.lmatrix('hist_chars')
+    hist_chars_mask = tensor.matrix('hist_chars_mask')
+    hist_word_mask = tensor.matrix('hist_word_mask')
+
+    pos_cost, diff_cost = postagger.cost(pos_weight,
+                                         pos_chars, pos_chars_mask, pos_word_mask, pos_targets,
+                                         norm_chars, norm_chars_mask, norm_word_mask,
+                                         hist_chars, hist_chars_mask, hist_word_mask).sum()
+    batch_cost = pos_weight * pos_cost + (1.0 - pos_weight) * diff_cost
+    batch_size = pos_chars.shape[1].copy(name="batch_size")
     cost = aggregation.mean(batch_cost, batch_size)
     cost.name = "cost"
     logger.info("Cost graph is built")
@@ -127,13 +284,17 @@ def train(postagger, dataset, num_batches, save_path, step_rule='original'):
     algorithm = GradientDescent(cost=cost, parameters=cg.parameters, step_rule=step_rule_obj)
 
     # Fetch variables useful for debugging
-    max_length = embeddings.shape[0].copy(name="max_length")
-    cost_per_character = aggregation.mean(
-        batch_cost, batch_size * max_length).copy(
-        name="character_log_likelihood")
+    max_pos_length = pos_chars.shape[0].copy(name="max_pos_length")
+    max_norm_length = pos_chars.shape[0].copy(name="max_norm_length")
+    max_hist_length = pos_chars.shape[0].copy(name="max_hist_length")
+    report_pos_cost = pos_cost.copy(name='pos_cost')
+    report_diff_cost = diff_cost.copy(name='diff_cost')
+    # cost_per_character = aggregation.mean(
+    #     batch_cost, batch_size * max_length).copy(
+    #     name="character_log_likelihood")
     observables = [
-         cost,
-         batch_size, max_length, cost_per_character,
+         cost, report_pos_cost, report_diff_cost,
+         batch_size, max_pos_length, max_hist_length, max_norm_length, # cost_per_character,
          algorithm.total_step_norm, algorithm.total_gradient_norm]
     # for name, parameter in parameters.items():
     #     observables.append(parameter.norm(2).copy(name + "_norm"))
@@ -167,8 +328,8 @@ def train(postagger, dataset, num_batches, save_path, step_rule='original'):
 def predict(postagger, dataset, save_path, pos_voc):
     data_stream = dataset.get_example_stream()
     data_stream = Batch(data_stream, iteration_scheme=ConstantScheme(50))
-    data_stream = Padding(data_stream, mask_sources=('embeddings',))
-    data_stream = FilterSources(data_stream, sources=('words', 'embeddings', 'embeddings_mask'))
+    data_stream = Padding(data_stream, mask_sources=('chars', 'word_mask'))
+    data_stream = FilterSources(data_stream, sources=('words', 'chars', 'chars_mask', 'word_mask'))
     data_stream = Mapping(data_stream, _transpose)
 
     chars = tensor.lmatrix('chars')
@@ -184,8 +345,8 @@ def predict(postagger, dataset, save_path, pos_voc):
 
     reverse_pos = {idx: word for word, idx in pos_voc.items()}
 
-    for i_words, i_embeddings, i_embeddings_mask in data_stream.get_epoch_iterator():
-        o_pos, o_mask = tag_fn(i_embeddings, i_embeddings_mask)
+    for i_words, i_chars, i_chars_mask, i_word_mask in data_stream.get_epoch_iterator():
+        o_pos, o_mask = tag_fn(i_chars, i_chars_mask, i_word_mask)
         o_pos_idx = numpy.argmax(o_pos, axis=-1)
         for sntno in range(o_pos_idx.shape[1]):
             words = i_words[sntno]
@@ -199,19 +360,23 @@ def predict(postagger, dataset, save_path, pos_voc):
 def evaluate(postagger, dataset, save_path, pos_voc):
     data_stream = dataset.get_example_stream()
     data_stream = Batch(data_stream, iteration_scheme=ConstantScheme(50))
-    data_stream = Padding(data_stream, mask_sources=('embeddings', 'pos'))
-    data_stream = FilterSources(data_stream, sources=('embeddings', 'embeddings_mask', 'pos'))
+    data_stream = FilterSources(data_stream, sources=('chars', 'word_mask', 'pos'))
+    data_stream = Padding(data_stream, mask_sources=('chars', 'word_mask', 'pos'))
+    data_stream = FilterSources(data_stream, sources=('chars', 'chars_mask', 'word_mask', 'pos'))
     data_stream = Mapping(data_stream, _transpose)
 
-    embeddings = tensor.tensor3('embeddings')
-    embeddings_mask = tensor.matrix('embeddings_mask')
-    pos, out_mask = postagger.apply(embeddings, embeddings_mask)
+    chars = tensor.lmatrix('chars')
+    chars_mask = tensor.matrix('chars_mask')
+    word_mask = tensor.matrix('word_mask')
+    pos_targets = tensor.lmatrix('pos_targets')
+
+    pos, out_mask = postagger.apply(chars, chars_mask, word_mask)
 
     model = Model(pos)
     with open(save_path, 'rb') as f:
         model.set_parameter_values(load_parameters(f))
 
-    tag_fn = theano.function(inputs=[embeddings, embeddings_mask], outputs=[pos, out_mask])
+    tag_fn = theano.function(inputs=[chars, chars_mask, word_mask], outputs=[pos, out_mask])
 
     npos = len(pos_voc)
 
@@ -222,8 +387,8 @@ def evaluate(postagger, dataset, save_path, pos_voc):
     pred_table = numpy.zeros((npos,))
     hit_table = numpy.zeros((npos,))
 
-    for i_embeddings, i_embeddings_mask, i_pos_idx in data_stream.get_epoch_iterator():
-        o_pos, o_mask = tag_fn(i_embeddings, i_embeddings_mask)
+    for i_chars, i_chars_mask, i_word_mask, i_pos_idx in data_stream.get_epoch_iterator():
+        o_pos, o_mask = tag_fn(i_chars, i_chars_mask, i_word_mask)
         o_pos_idx = numpy.argmax(o_pos, axis=-1)
 
         # total += o_mask.sum()
@@ -275,14 +440,14 @@ def main():
              " is `train` OR path to an `.tar` files with learned"
              " parameters if the mode is `predict`.")
     parser.add_argument(
-        "embedmodel",
-        help="The path to the trained word embedding model")
-    parser.add_argument(
-        "embedtrain",
-        help="the embedding training corpus (required for both training and prediction)")
+        "histtrain",
+        help="the historical training corpus (required for both training and prediction)")
     parser.add_argument(
         "postrain",
         help="the POS training corpus (required for both training and prediction)")
+    parser.add_argument(
+        "--pos-weight", default=0.5, type=float,
+        help="Weight of pos_cost relative to diff_cost")
     parser.add_argument(
         "--num-batches", default=10000, type=int,
         help="Train on this many batches.")
@@ -297,56 +462,36 @@ def main():
         help="The file to test on in prediction mode")
     args = parser.parse_args()
 
-    with open(args.embedtrain, 'r') as f:
-        _, chars_voc = load_training(f)
+    with open(args.histtrain, 'r') as f:
+        hist_data, chars_voc = load_historical(f)
 
     with open(args.postrain, 'r') as f:
-        text_ds, pos, pos_voc = load_conll(f, chars_voc=chars_voc)
+        pos_data, _, pos_voc = load_conll(f, chars_voc=chars_voc)
 
-    embedding_dim = 100
-    tagger_dim = 101
+    train_ds = join_training_data(pos_data, hist_data)
 
-    hidden_dim = 101
-
-    if args.recurrent_type == 'rnn':
-        embedder_transition = SimpleRecurrent(activation=Tanh(), dim=embedding_dim)
-    elif args.recurrent_type == 'lstm':
-        embedder_transition = LSTM(dim=embedding_dim)
-    elif args.recurrent_type == 'gru':
-        embedder_transition = GatedRecurrent(dim=embedding_dim)
-    else:
-        raise ValueError('Unknown transition type: ' + args.recurrent_type)
-
-    # TODO: Name of ContextEmbedder brick should be changed here and in embed.py.
-    embedder = ContextEmbedder(len(chars_voc), embedding_dim, hidden_dim, embedder_transition, 0.0, chars_voc[' '],
-                               name="tagger")
-    tagger = PreembeddedPOSTagger(embedding_dim, tagger_dim, len(pos_voc), args.recurrent_type, name="tagger")
+    tagger = HistPOSTagger(len(chars_voc), [50, 150, 51], len(pos_voc), args.recurrent_type)
 
     if args.mode == "train":
         num_batches = args.num_batches
-        text_enc = embed(embedder, text_ds, args.embedmodel)
-        train_data = collections.OrderedDict()
-        train_data['embeddings'] = text_enc
-        train_data['pos'] = pos
-        train_ds = IndexableDataset(train_data)
-        train(tagger, train_ds, num_batches, args.taggermodel, step_rule=args.step_rule)
-    elif args.mode == "predict":
-        with open(args.test_file, 'r') if args.test_file is not None else sys.stdin as f:
-            text_ds = load_vertical(f, chars_voc)
-        test_enc = embed(embedder, text_ds, args.embedmodel)
-        test_data = collections.OrderedDict()
-        test_data['embeddings'] = test_enc
-        test_ds = IndexableDataset(test_data)
-        predict(tagger, test_ds, args.taggermodel, pos_voc)
-    elif args.mode == "eval":
-        with open(args.test_file, 'r') if args.test_file is not None else sys.stdin as f:
-            text_ds, pos, _ = load_conll(f, chars_voc, pos_voc=pos_voc)
-        test_enc = embed(embedder, text_ds, args.embedmodel)
-        test_data = collections.OrderedDict()
-        test_data['embeddings'] = test_enc
-        test_data['pos'] = pos
-        test_ds = IndexableDataset(test_data)
-        evaluate(tagger, test_ds, args.taggermodel, pos_voc)
+        train(args.pos_weight, tagger, train_ds, num_batches, args.taggermodel, step_rule=args.step_rule)
+    # elif args.mode == "predict":
+    #     with open(args.test_file, 'r') if args.test_file is not None else sys.stdin as f:
+    #         text_ds = load_vertical(f, chars_voc)
+    #     test_enc = embed(embedder, text_ds, args.embedmodel)
+    #     test_data = collections.OrderedDict()
+    #     test_data['embeddings'] = test_enc
+    #     test_ds = IndexableDataset(test_data)
+    #     predict(tagger, test_ds, args.taggermodel, pos_voc)
+    # elif args.mode == "eval":
+    #     with open(args.test_file, 'r') if args.test_file is not None else sys.stdin as f:
+    #         text_ds, pos, _ = load_conll(f, chars_voc, pos_voc=pos_voc)
+    #     test_enc = embed(embedder, text_ds, args.embedmodel)
+    #     test_data = collections.OrderedDict()
+    #     test_data['embeddings'] = test_enc
+    #     test_data['pos'] = pos
+    #     test_ds = IndexableDataset(test_data)
+    #     evaluate(tagger, test_ds, args.taggermodel, pos_voc)
 
 
 if __name__ == '__main__':
