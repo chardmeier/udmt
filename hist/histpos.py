@@ -200,15 +200,6 @@ def join_training_data(pos_data, hist_data):
     return IndexableDataset(all_data)
 
 
-def load_vertical(infile, chars_voc):
-    tokens = []
-    for key, group in itertools.groupby(infile, lambda l: l == '\n'):
-        if not key:
-            tokens.append([w.rstrip('\n') for w in group])
-
-    return text_to_dataset(tokens, chars_voc)
-
-
 def train(pos_weight, postagger, dataset, num_batches, save_path, step_rule='original'):
     # Data processing pipeline
 
