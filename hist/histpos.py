@@ -4,10 +4,12 @@ from blocks.bricks import application, Initializable
 from blocks.extensions import FinishAfter, Printing, Timing
 from blocks.extensions.monitoring import DataStreamMonitoring, TrainingDataMonitoring
 from blocks.extensions.saveload import Checkpoint
+from blocks.filter import VariableFilter
 from blocks.graph import ComputationGraph
 from blocks.initialization import Constant, IsotropicGaussian
 from blocks.main_loop import MainLoop
 from blocks.model import Model
+from blocks.roles import INPUT, WEIGHT
 from blocks.serialization import load_parameters
 from dependency import conll_trees
 from fuel.transformers import Batch, FilterSources, Mapping, Padding
@@ -62,6 +64,7 @@ class TrainingConfiguration(Configuration):
         self.pos_weight = 0.5
         self.num_batches = 100000
         self.step_rule = 'original'
+        self.l2_penalty = 0.0
 
 
 class HistPOSTagger(Initializable):
@@ -307,9 +310,23 @@ def train(postagger, train_config, dataset, save_path, pos_validation_set=None, 
     hist_word_mask = tensor.matrix('hist_word_mask')
 
     pos_cost = postagger.pos_cost(pos_chars, pos_chars_mask, pos_word_mask, pos_targets)
+    pos_cost.name = 'pos_cost'
+
     diff_cost = postagger.diff_cost(norm_chars, norm_chars_mask, norm_word_mask,
                                     hist_chars, hist_chars_mask, hist_word_mask)
-    cost = train_config.pos_weight * pos_cost + (1.0 - train_config.pos_weight) * diff_cost
+    diff_cost.name = 'diff_cost'
+
+    unregularised_cost = train_config.pos_weight * pos_cost + (1.0 - train_config.pos_weight) * diff_cost
+    unregularised_cost.name = 'unregularised_cost'
+
+    if train_config.l2_penalty:
+        cg_unreg = ComputationGraph(unregularised_cost)
+        weights = VariableFilter(roles=[WEIGHT])(cg_unreg.variables)
+        regularisation_term = sum(tensor.sqr(w).sum() for w in weights)
+    else:
+        regularisation_term = 0.0
+
+    cost = unregularised_cost + regularisation_term
     cost.name = "cost"
     logger.info("Cost graph is built")
 
