@@ -1,10 +1,9 @@
 from blocks.algorithms import (GradientDescent, Scale,
                                StepClipping, CompositeRule, RMSProp, Adam, Momentum, AdaGrad)
-from blocks.bricks import application, Initializable, MLP, Softmax, Tanh
+from blocks.bricks import application, Initializable, MLP, NDimensionalSoftmax, Tanh
 from blocks.bricks.lookup import LookupTable
 from blocks.bricks.parallel import Fork, Merge
 from blocks.bricks.recurrent import GatedRecurrent, LSTM, SimpleRecurrent
-from blocks.bricks.wrappers import WithExtraDims
 from blocks.extensions import FinishAfter, Printing, Timing
 from blocks.extensions.monitoring import TrainingDataMonitoring
 from blocks.extensions.saveload import Checkpoint
@@ -204,19 +203,17 @@ class WordEmbedding(Initializable):
         return self.final_sequence.apply(state, mask=word_mask)
 
 
-class NDimensionalMLP(MLP):
-    decorators = [WithExtraDims()]
-
-
 class TagPredictor(Initializable):
     def __init__(self, dimensions, prototype=Tanh(), **kwargs):
         super().__init__(**kwargs)
 
-        activations = [copy.deepcopy(prototype) for _ in dimensions[1:-1]] + [Softmax()]
-        mlp = NDimensionalMLP(activations=activations, dims=dimensions)
+        activations = [copy.deepcopy(prototype) for _ in dimensions[1:-1]] + [None]
+        mlp = MLP(activations=activations, dims=dimensions)
+        softmax = NDimensionalSoftmax()
 
         self.mlp = mlp
-        self.children = [mlp]
+        self.softmax = softmax
+        self.children = [mlp, softmax]
 
     @application
     def cost(self, word_enc, mask, targets):
@@ -228,7 +225,7 @@ class TagPredictor(Initializable):
 
     @application
     def apply(self, word_enc):
-        return self.mlp.apply(word_enc, extra_ndim=1)
+        return self.softmax.apply(self.mlp.apply(word_enc), extra_ndim=1)
 
 
 class POSTagger(Initializable):
