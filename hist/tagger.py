@@ -217,7 +217,7 @@ class TagPredictor(Initializable):
         predictions = self.apply(word_enc)
         widx, exmpl = tensor.nonzero(mask)
         tgtidx = targets[widx, exmpl]
-        crossentropy = -tensor.sum(tensor.log(predictions[widx, exmpl, tgtidx]))
+        crossentropy = -tensor.sum(tensor.log(predictions[widx, exmpl, tgtidx])) / word_enc.shape[1]
         return crossentropy
 
     @application

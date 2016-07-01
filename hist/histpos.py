@@ -251,9 +251,7 @@ def train(pos_weight, postagger, dataset, num_batches, save_path, step_rule='ori
     pos_cost, diff_cost = postagger.cost(pos_chars, pos_chars_mask, pos_word_mask, pos_targets,
                                          norm_chars, norm_chars_mask, norm_word_mask,
                                          hist_chars, hist_chars_mask, hist_word_mask)
-    batch_cost = pos_weight * pos_cost + (1.0 - pos_weight) * diff_cost
-    batch_size = pos_chars.shape[1].copy(name="batch_size")
-    cost = aggregation.mean(batch_cost, batch_size)
+    cost = pos_weight * pos_cost + (1.0 - pos_weight) * diff_cost
     cost.name = "cost"
     logger.info("Cost graph is built")
 
@@ -288,6 +286,7 @@ def train(pos_weight, postagger, dataset, num_batches, save_path, step_rule='ori
     algorithm = GradientDescent(cost=cost, parameters=cg.parameters, step_rule=step_rule_obj)
 
     # Fetch variables useful for debugging
+    batch_size = pos_chars.shape[1].copy(name="batch_size")
     max_pos_length = pos_chars.shape[0].copy(name="max_pos_length")
     max_norm_length = pos_chars.shape[0].copy(name="max_norm_length")
     max_hist_length = pos_chars.shape[0].copy(name="max_hist_length")
