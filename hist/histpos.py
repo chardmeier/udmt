@@ -41,7 +41,7 @@ class Configuration:
         self.__dict__.update(json.load(infile))
 
     def dump_json(self):
-        return json.dumps(self.__dict__, indent=2)
+        return json.dumps(self.__dict__, indent=2, sort_keys=True)
 
 
 class HistPOSTaggerConfiguration(Configuration):
