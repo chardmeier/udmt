@@ -114,6 +114,9 @@ class HistPOSTagger(Initializable):
         if self.diff_loss == 'squared_error':
             diff_cost = (collected_mask * tensor.sqr(norm_enc_trunc - hist_enc_trunc).sum(axis=2)).sum(axis=0).mean()
         elif self.diff_loss == 'crossentropy':
+            # Convert tanh to logistic sigmoid to get the correct range for crossentropy.
+            norm_enc_trunc = 0.5 * norm_enc_trunc + 1.0
+            hist_enc_trunc = 0.5 * hist_enc_trunc + 1.0
             diff_cost = (collected_mask *
                          (norm_enc_trunc * tensor.log(hist_enc_trunc) +
                           ((1.0 - norm_enc_trunc) * tensor.log(1.0 - hist_enc_trunc))).sum(axis=2)).sum(axis=0).mean()
