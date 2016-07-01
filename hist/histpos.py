@@ -389,7 +389,7 @@ def train(postagger, train_config, dataset, save_path, pos_validation_set=None, 
 
     validation_set_monitoring = []
     if pos_validation_set:
-        pos_val_data_stream = dataset.get_example_stream()
+        pos_val_data_stream = pos_validation_set.get_example_stream()
         pos_val_data_stream = Batch(pos_val_data_stream, iteration_scheme=ConstantScheme(100))
         pos_val_data_stream = FilterSources(pos_val_data_stream,
                                             sources=('pos_chars', 'pos_word_mask', 'pos_targets'))
@@ -404,7 +404,7 @@ def train(postagger, train_config, dataset, save_path, pos_validation_set=None, 
         validation_set_monitoring.append(pos_monitoring)
 
     if hist_validation_set:
-        hist_val_data_stream = dataset.get_example_stream()
+        hist_val_data_stream = hist_validation_set.get_example_stream()
         hist_val_data_stream = Batch(hist_val_data_stream, iteration_scheme=ConstantScheme(100))
         hist_val_data_stream = FilterSources(hist_val_data_stream,
                                              sources=('norm_chars', 'norm_word_mask',
