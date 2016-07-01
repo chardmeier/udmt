@@ -70,7 +70,7 @@ class HistPOSTagger(Initializable):
     @application
     def apply(self, chars, chars_mask, word_mask):
         encoded, collected_mask = self.embedder.apply(chars, chars_mask, word_mask)
-        return self.predictor.apply(encoded)
+        return self.predictor.apply(encoded), collected_mask
 
 
 def _transpose(data):
