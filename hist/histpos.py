@@ -358,14 +358,14 @@ def predict(postagger, dataset, save_path, pos_voc):
 def evaluate(postagger, dataset, save_path, pos_voc):
     data_stream = dataset.get_example_stream()
     data_stream = Batch(data_stream, iteration_scheme=ConstantScheme(50))
-    data_stream = FilterSources(data_stream, sources=('chars', 'word_mask', 'pos'))
-    data_stream = Padding(data_stream, mask_sources=('chars', 'word_mask', 'pos'))
-    data_stream = FilterSources(data_stream, sources=('chars', 'chars_mask', 'word_mask', 'pos'))
+    data_stream = FilterSources(data_stream, sources=('pos_chars', 'pos_word_mask', 'pos_targets'))
+    data_stream = Padding(data_stream, mask_sources=('pos_chars', 'pos_word_mask', 'pos_targets'))
+    data_stream = FilterSources(data_stream, sources=('pos_chars', 'pos_chars_mask', 'pos_word_mask', 'pos_targets'))
     data_stream = Mapping(data_stream, _transpose)
 
-    chars = tensor.lmatrix('chars')
-    chars_mask = tensor.matrix('chars_mask')
-    word_mask = tensor.matrix('word_mask')
+    chars = tensor.lmatrix('pos_chars')
+    chars_mask = tensor.matrix('pos_chars_mask')
+    word_mask = tensor.matrix('pos_word_mask')
 
     pos, out_mask = postagger.apply(chars, chars_mask, word_mask)
 
