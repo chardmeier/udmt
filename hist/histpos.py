@@ -1,20 +1,18 @@
 from blocks.algorithms import (GradientDescent, Scale,
                                StepClipping, CompositeRule, RMSProp, Adam, Momentum, AdaGrad)
-from blocks.bricks import application, Initializable, Tanh
-from blocks.bricks.recurrent import GatedRecurrent, LSTM, SimpleRecurrent
+from blocks.bricks import application, Initializable
 from blocks.extensions import FinishAfter, Printing, Timing
 from blocks.extensions.monitoring import TrainingDataMonitoring
 from blocks.extensions.saveload import Checkpoint
 from blocks.graph import ComputationGraph
-from blocks.initialization import Constant, IsotropicGaussian, Orthogonal
+from blocks.initialization import Constant, IsotropicGaussian
 from blocks.main_loop import MainLoop
 from blocks.model import Model
-from blocks.monitoring import aggregation
 from blocks.serialization import load_parameters
 from dependency import conll_trees
 from fuel.transformers import Batch, FilterSources, Mapping, Padding
 from fuel.datasets import IndexableDataset
-from fuel.schemes import ConstantScheme, ShuffledScheme
+from fuel.schemes import ConstantScheme
 from hist.tagger import load_vertical, TagPredictor, WordEmbedding
 from theano import tensor
 
