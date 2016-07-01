@@ -36,28 +36,37 @@ logger = logging.getLogger(__name__)
 
 class HistPOSTagger(Initializable):
     def __init__(self, alphabet_size, seq_dimensions, pos_dimension, transition_type,
-                 diff_loss='squared_error', **kwargs):
+                 share_embedders=True, diff_loss='squared_error', **kwargs):
         super().__init__(**kwargs)
 
-        embedder = WordEmbedding(alphabet_size, seq_dimensions, transition_type)
+        hist_embedder = WordEmbedding(alphabet_size, seq_dimensions, transition_type)
+        self.children.append(hist_embedder)
+
+        if share_embedders:
+            norm_embedder = hist_embedder
+        else:
+            norm_embedder = WordEmbedding(alphabet_size, seq_dimensions, transition_type)
+            self.children.append(norm_embedder)
+
         predictor = TagPredictor(seq_dimensions[-1], pos_dimension)
+        self.children.append(predictor)
 
         self.diff_loss = diff_loss
 
-        self.embedder = embedder
+        self.norm_embedder = norm_embedder
+        self.hist_embedder = hist_embedder
         self.predictor = predictor
-        self.children = [embedder, predictor]
 
     @application
     def cost(self,
              pos_chars, pos_chars_mask, pos_word_mask, pos_targets,
              norm_chars, norm_chars_mask, norm_word_mask,
              hist_chars, hist_chars_mask, hist_word_mask):
-        pos_encoded, pos_collected_mask = self.embedder.apply(pos_chars, pos_chars_mask, pos_word_mask)
+        pos_encoded, pos_collected_mask = self.norm_embedder.apply(pos_chars, pos_chars_mask, pos_word_mask)
         pos_cost = self.predictor.cost(pos_encoded, pos_collected_mask, pos_targets)
 
-        norm_encoded, norm_collected_mask = self.embedder.apply(norm_chars, norm_chars_mask, norm_word_mask)
-        hist_encoded, hist_collected_mask = self.embedder.apply(hist_chars, hist_chars_mask, hist_word_mask)
+        norm_encoded, norm_collected_mask = self.norm_embedder.apply(norm_chars, norm_chars_mask, norm_word_mask)
+        hist_encoded, hist_collected_mask = self.hist_embedder.apply(hist_chars, hist_chars_mask, hist_word_mask)
 
         # Input char sequences can have different length, but the number of words should always be the same.
         # Trim the matrices to the same size.
@@ -78,8 +87,15 @@ class HistPOSTagger(Initializable):
         return pos_cost, diff_cost
 
     @application
-    def apply(self, chars, chars_mask, word_mask):
-        encoded, collected_mask = self.embedder.apply(chars, chars_mask, word_mask)
+    def apply(self, embedder, chars, chars_mask, word_mask):
+        if embedder == 'norm':
+            embedder_net = self.norm_embedder
+        elif embedder == 'hist':
+            embedder_net = self.hist_embedder
+        else:
+            raise ValueError
+
+        encoded, collected_mask = embedder_net.apply(chars, chars_mask, word_mask)
         return self.predictor.apply(encoded), collected_mask
 
 
@@ -338,7 +354,7 @@ def train(pos_weight, postagger, dataset, num_batches, save_path, step_rule='ori
     main_loop.run()
 
 
-def predict(postagger, dataset, save_path, pos_voc):
+def predict(postagger, dataset, save_path, pos_voc, embedder='norm'):
     data_stream = dataset.get_example_stream()
     data_stream = Batch(data_stream, iteration_scheme=ConstantScheme(50))
     data_stream = Padding(data_stream, mask_sources=('chars', 'word_mask'))
@@ -348,7 +364,7 @@ def predict(postagger, dataset, save_path, pos_voc):
     chars = tensor.lmatrix('chars')
     chars_mask = tensor.matrix('chars_mask')
     word_mask = tensor.matrix('word_mask')
-    pos, out_mask = postagger.apply(chars, chars_mask, word_mask)
+    pos, out_mask = postagger.apply(embedder, chars, chars_mask, word_mask)
 
     model = Model(pos)
     with open(save_path, 'rb') as f:
@@ -370,7 +386,7 @@ def predict(postagger, dataset, save_path, pos_voc):
             print()
 
 
-def evaluate(postagger, dataset, save_path, pos_voc):
+def evaluate(postagger, dataset, save_path, pos_voc, embedder='norm'):
     data_stream = dataset.get_example_stream()
     data_stream = Batch(data_stream, iteration_scheme=ConstantScheme(50))
     data_stream = FilterSources(data_stream, sources=('pos_chars', 'pos_word_mask', 'pos_targets'))
@@ -382,7 +398,7 @@ def evaluate(postagger, dataset, save_path, pos_voc):
     chars_mask = tensor.matrix('pos_chars_mask')
     word_mask = tensor.matrix('pos_word_mask')
 
-    pos, out_mask = postagger.apply(chars, chars_mask, word_mask)
+    pos, out_mask = postagger.apply(embedder, chars, chars_mask, word_mask)
 
     model = Model(pos)
     with open(save_path, 'rb') as f:
@@ -461,6 +477,12 @@ def main():
         "--pos-weight", default=0.5, type=float,
         help="Weight of pos_cost relative to diff_cost")
     parser.add_argument(
+        "--no-share-embedders", dest="share_embedders", action="store_false",
+        help="Use different embedding networks for historical and modern text.")
+    parser.add_argument(
+        "--embedder", choices=["norm", "hist"], default="norm",
+        help="Embedder to use in prediction and evaluation mode if not shared.")
+    parser.add_argument(
         "--num-batches", default=10000, type=int,
         help="Train on this many batches.")
     parser.add_argument(
@@ -490,12 +512,12 @@ def main():
     elif args.mode == "predict":
         with open(args.test_file, 'r') if args.test_file is not None else sys.stdin as f:
             test_ds = load_vertical(f, chars_voc)
-        predict(tagger, test_ds, args.taggermodel, pos_voc)
+        predict(tagger, test_ds, args.taggermodel, pos_voc, embedder=args.embedder)
     elif args.mode == "eval":
         with open(args.test_file, 'r') if args.test_file is not None else sys.stdin as f:
             test_data, _, _ = load_conll(f, chars_voc=chars_voc, pos_voc=pos_voc)
         test_ds = IndexableDataset(test_data)
-        evaluate(tagger, test_ds, args.taggermodel, pos_voc)
+        evaluate(tagger, test_ds, args.taggermodel, pos_voc, embedder=args.embedder)
 
 
 if __name__ == '__main__':
