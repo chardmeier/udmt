@@ -504,7 +504,8 @@ def main():
 
     train_ds = join_training_data(pos_data, hist_data)
 
-    tagger = HistPOSTagger(len(chars_voc), [50, 150, 51], len(pos_voc), args.recurrent_type)
+    tagger = HistPOSTagger(len(chars_voc), [50, 150, 51], len(pos_voc), args.recurrent_type,
+                           share_embedders=args.share_embedders)
 
     if args.mode == "train":
         num_batches = args.num_batches
