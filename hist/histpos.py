@@ -288,8 +288,8 @@ def train(pos_weight, postagger, dataset, num_batches, save_path, step_rule='ori
     # Fetch variables useful for debugging
     batch_size = pos_chars.shape[1].copy(name="batch_size")
     max_pos_length = pos_chars.shape[0].copy(name="max_pos_length")
-    max_norm_length = pos_chars.shape[0].copy(name="max_norm_length")
-    max_hist_length = pos_chars.shape[0].copy(name="max_hist_length")
+    max_norm_length = norm_chars.shape[0].copy(name="max_norm_length")
+    max_hist_length = hist_chars.shape[0].copy(name="max_hist_length")
     report_pos_cost = pos_cost.copy(name='pos_cost')
     report_diff_cost = diff_cost.copy(name='diff_cost')
     # cost_per_character = aggregation.mean(
