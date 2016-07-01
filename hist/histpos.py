@@ -5,7 +5,7 @@ from blocks.extensions import FinishAfter, Printing, Timing
 from blocks.extensions.monitoring import DataStreamMonitoring, TrainingDataMonitoring
 from blocks.extensions.saveload import Checkpoint
 from blocks.filter import VariableFilter
-from blocks.graph import ComputationGraph
+from blocks.graph import apply_dropout, ComputationGraph
 from blocks.initialization import Constant, IsotropicGaussian
 from blocks.main_loop import MainLoop
 from blocks.model import Model
@@ -65,6 +65,7 @@ class TrainingConfiguration(Configuration):
         self.num_batches = 100000
         self.step_rule = 'original'
         self.l2_penalty = 0.0
+        self.dropout_rate = 0.0
 
 
 class HistPOSTagger(Initializable):
@@ -330,6 +331,12 @@ def train(postagger, train_config, dataset, save_path, pos_validation_set=None, 
     cost.name = "cost"
     logger.info("Cost graph is built")
 
+    cg = ComputationGraph([cost, unregularised_cost, pos_cost, diff_cost])
+    if train_config.dropout_rate:
+        inputs = VariableFilter(roles=[INPUT])(cg.variables)
+        cg = apply_dropout(cg, inputs, train_config.dropout_rate)
+        cost, unregularised_cost, pos_cost, diff_cost = cg.outputs
+
     # Give an idea of what's going on
     model = Model(cost)
     parameters = model.get_parameter_dict()
@@ -357,7 +364,6 @@ def train(postagger, train_config, dataset, save_path, pos_validation_set=None, 
         raise ValueError('Unknow step rule: ' + train_config.step_rule)
 
     # Define the training algorithm.
-    cg = ComputationGraph(cost)
     algorithm = GradientDescent(cost=cost, parameters=cg.parameters, step_rule=step_rule_obj)
 
     # Fetch variables useful for debugging
@@ -365,13 +371,11 @@ def train(postagger, train_config, dataset, save_path, pos_validation_set=None, 
     max_pos_length = pos_chars.shape[0].copy(name="max_pos_length")
     max_norm_length = norm_chars.shape[0].copy(name="max_norm_length")
     max_hist_length = hist_chars.shape[0].copy(name="max_hist_length")
-    report_pos_cost = pos_cost.copy(name='pos_cost')
-    report_diff_cost = diff_cost.copy(name='diff_cost')
     # cost_per_character = aggregation.mean(
     #     batch_cost, batch_size * max_length).copy(
     #     name="character_log_likelihood")
     observables = [
-         cost, report_pos_cost, report_diff_cost,
+         cost, pos_cost, diff_cost,
          batch_size, max_pos_length, max_hist_length, max_norm_length,  # cost_per_character,
          algorithm.total_step_norm, algorithm.total_gradient_norm]
     # for name, parameter in parameters.items():
