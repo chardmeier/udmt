@@ -15,7 +15,7 @@ from dependency import conll_trees
 from fuel.transformers import Batch, FilterSources, Mapping, Padding
 from fuel.datasets import IndexableDataset
 from fuel.schemes import ConstantScheme, ShuffledScheme
-from hist.tagger import TagPredictor, WordEmbedding
+from hist.tagger import load_vertical, TagPredictor, WordEmbedding
 from theano import tensor
 
 import argparse
@@ -292,7 +292,7 @@ def train(pos_weight, postagger, dataset, num_batches, save_path, step_rule='ori
     #     name="character_log_likelihood")
     observables = [
          cost, report_pos_cost, report_diff_cost,
-         batch_size, max_pos_length, max_hist_length, max_norm_length, # cost_per_character,
+         batch_size, max_pos_length, max_hist_length, max_norm_length,  # cost_per_character,
          algorithm.total_step_norm, algorithm.total_gradient_norm]
     # for name, parameter in parameters.items():
     #     observables.append(parameter.norm(2).copy(name + "_norm"))
@@ -366,7 +366,6 @@ def evaluate(postagger, dataset, save_path, pos_voc):
     chars = tensor.lmatrix('chars')
     chars_mask = tensor.matrix('chars_mask')
     word_mask = tensor.matrix('word_mask')
-    pos_targets = tensor.lmatrix('pos_targets')
 
     pos, out_mask = postagger.apply(chars, chars_mask, word_mask)
 
@@ -473,23 +472,15 @@ def main():
     if args.mode == "train":
         num_batches = args.num_batches
         train(args.pos_weight, tagger, train_ds, num_batches, args.taggermodel, step_rule=args.step_rule)
-    # elif args.mode == "predict":
-    #     with open(args.test_file, 'r') if args.test_file is not None else sys.stdin as f:
-    #         text_ds = load_vertical(f, chars_voc)
-    #     test_enc = embed(embedder, text_ds, args.embedmodel)
-    #     test_data = collections.OrderedDict()
-    #     test_data['embeddings'] = test_enc
-    #     test_ds = IndexableDataset(test_data)
-    #     predict(tagger, test_ds, args.taggermodel, pos_voc)
-    # elif args.mode == "eval":
-    #     with open(args.test_file, 'r') if args.test_file is not None else sys.stdin as f:
-    #         text_ds, pos, _ = load_conll(f, chars_voc, pos_voc=pos_voc)
-    #     test_enc = embed(embedder, text_ds, args.embedmodel)
-    #     test_data = collections.OrderedDict()
-    #     test_data['embeddings'] = test_enc
-    #     test_data['pos'] = pos
-    #     test_ds = IndexableDataset(test_data)
-    #     evaluate(tagger, test_ds, args.taggermodel, pos_voc)
+    elif args.mode == "predict":
+        with open(args.test_file, 'r') if args.test_file is not None else sys.stdin as f:
+            test_ds = load_vertical(f, chars_voc)
+        predict(tagger, test_ds, args.taggermodel, pos_voc)
+    elif args.mode == "eval":
+        with open(args.test_file, 'r') if args.test_file is not None else sys.stdin as f:
+            test_data, _, _ = load_conll(f, chars_voc=chars_voc, pos_voc=pos_voc)
+        test_ds = IndexableDataset(test_data)
+        evaluate(tagger, test_ds, args.taggermodel, pos_voc)
 
 
 if __name__ == '__main__':
