@@ -543,9 +543,9 @@ def evaluate(postagger, dataset, save_path, pos_voc, embedder='norm'):
 
 def save_metadata(outfile, net_config, chars_voc, pos_voc):
     with open(outfile + '.meta', 'wb') as f:
-        pickle.dump(f, net_config)
-        pickle.dump(f, chars_voc)
-        pickle.dump(f, pos_voc)
+        pickle.dump(net_config, f)
+        pickle.dump(chars_voc, f)
+        pickle.dump(pos_voc, f)
 
 
 def load_metadata(infile):
