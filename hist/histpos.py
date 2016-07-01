@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 class HistPOSTagger(Initializable):
     def __init__(self, alphabet_size, seq_dimensions, pos_dimension, transition_type,
-                 share_embedders=True, diff_loss='squared_error', **kwargs):
+                 share_embedders=True, diff_loss='squared_error', hidden_dims=None, **kwargs):
         super().__init__(**kwargs)
 
         hist_embedder = WordEmbedding(alphabet_size, seq_dimensions, transition_type)
@@ -48,7 +48,10 @@ class HistPOSTagger(Initializable):
             norm_embedder = WordEmbedding(alphabet_size, seq_dimensions, transition_type)
             self.children.append(norm_embedder)
 
-        predictor = TagPredictor(seq_dimensions[-1], pos_dimension)
+        if hidden_dims is None:
+            hidden_dims = []
+
+        predictor = TagPredictor([seq_dimensions[-1]] + hidden_dims + [pos_dimension])
         self.children.append(predictor)
 
         self.diff_loss = diff_loss

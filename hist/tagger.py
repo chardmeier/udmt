@@ -1,9 +1,10 @@
 from blocks.algorithms import (GradientDescent, Scale,
                                StepClipping, CompositeRule, RMSProp, Adam, Momentum, AdaGrad)
-from blocks.bricks import application, Initializable, Linear, NDimensionalSoftmax, Tanh
+from blocks.bricks import application, Initializable, MLP, Softmax, Tanh
 from blocks.bricks.lookup import LookupTable
 from blocks.bricks.parallel import Fork, Merge
 from blocks.bricks.recurrent import GatedRecurrent, LSTM, SimpleRecurrent
+from blocks.bricks.wrappers import WithExtraDims
 from blocks.extensions import FinishAfter, Printing, Timing
 from blocks.extensions.monitoring import TrainingDataMonitoring
 from blocks.extensions.saveload import Checkpoint
@@ -23,6 +24,7 @@ from theano import tensor
 
 import argparse
 import collections
+import copy
 import fuel
 import itertools
 import logging
@@ -202,15 +204,19 @@ class WordEmbedding(Initializable):
         return self.final_sequence.apply(state, mask=word_mask)
 
 
-class TagPredictor(Initializable):
-    def __init__(self, seq_dimension, pos_dimension, **kwargs):
-        super().__init__(**kwargs)
-        linear = Linear(input_dim=seq_dimension, output_dim=pos_dimension)
-        softmax = NDimensionalSoftmax()
+class NDimensionalMLP(MLP):
+    decorators = [WithExtraDims()]
 
-        self.linear = linear
-        self.softmax = softmax
-        self.children = [linear, softmax]
+
+class TagPredictor(Initializable):
+    def __init__(self, dimensions, prototype=Tanh(), **kwargs):
+        super().__init__(**kwargs)
+
+        activations = [copy.deepcopy(prototype) for _ in dimensions[1:-1]] + [Softmax()]
+        mlp = NDimensionalMLP(activations=activations, dims=dimensions)
+
+        self.mlp = mlp
+        self.children = [mlp]
 
     @application
     def cost(self, word_enc, mask, targets):
@@ -222,7 +228,7 @@ class TagPredictor(Initializable):
 
     @application
     def apply(self, word_enc):
-        return self.softmax.apply(self.linear.apply(word_enc), extra_ndim=1)
+        return self.mlp.apply(word_enc, extra_ndim=1)
 
 
 class POSTagger(Initializable):
@@ -231,7 +237,7 @@ class POSTagger(Initializable):
         super().__init__(**kwargs)
 
         embedder = WordEmbedding(alphabet_size, [char_dimension, char_dimension, word_dimension], transition_type)
-        predictor = TagPredictor(word_dimension, pos_dimension)
+        predictor = TagPredictor([word_dimension, pos_dimension])
 
         self.embedder = embedder
         self.predictor = predictor
