@@ -2,7 +2,7 @@ from blocks.algorithms import (GradientDescent, Scale,
                                StepClipping, CompositeRule, RMSProp, Adam, Momentum, AdaGrad)
 from blocks.bricks import application, Initializable
 from blocks.extensions import FinishAfter, Printing, Timing
-from blocks.extensions.monitoring import TrainingDataMonitoring
+from blocks.extensions.monitoring import DataStreamMonitoring, TrainingDataMonitoring
 from blocks.extensions.saveload import Checkpoint
 from blocks.graph import ComputationGraph
 from blocks.initialization import Constant, IsotropicGaussian
@@ -57,6 +57,8 @@ class TrainingConfiguration(Configuration):
     def __init__(self):
         self.histtrain_file = None
         self.postrain_file = None
+        self.histval_file = None
+        self.posval_file = None
         self.pos_weight = 0.5
         self.num_batches = 100000
         self.step_rule = 'original'
@@ -85,13 +87,16 @@ class HistPOSTagger(Initializable):
         self.predictor = predictor
 
     @application
-    def cost(self,
-             pos_chars, pos_chars_mask, pos_word_mask, pos_targets,
-             norm_chars, norm_chars_mask, norm_word_mask,
-             hist_chars, hist_chars_mask, hist_word_mask):
+    def pos_cost(self, pos_chars, pos_chars_mask, pos_word_mask, pos_targets):
         pos_encoded, pos_collected_mask = self.norm_embedder.apply(pos_chars, pos_chars_mask, pos_word_mask)
         pos_cost = self.predictor.cost(pos_encoded, pos_collected_mask, pos_targets)
 
+        return pos_cost
+
+    @application
+    def diff_cost(self,
+                  norm_chars, norm_chars_mask, norm_word_mask,
+                  hist_chars, hist_chars_mask, hist_word_mask):
         norm_encoded, norm_collected_mask = self.norm_embedder.apply(norm_chars, norm_chars_mask, norm_word_mask)
         hist_encoded, hist_collected_mask = self.hist_embedder.apply(hist_chars, hist_chars_mask, hist_word_mask)
 
@@ -111,7 +116,7 @@ class HistPOSTagger(Initializable):
         else:
             raise ValueError
 
-        return pos_cost, diff_cost
+        return diff_cost
 
     @application
     def apply(self, embedder, chars, chars_mask, word_mask):
@@ -267,7 +272,7 @@ def join_training_data(pos_data, hist_data):
     return IndexableDataset(all_data)
 
 
-def train(postagger, train_config, dataset, save_path):
+def train(postagger, train_config, dataset, save_path, pos_validation_set=None, hist_validation_set=None):
     # Data processing pipeline
 
     # dataset.example_iteration_scheme = ShuffledScheme(dataset.num_examples, 10)
@@ -301,9 +306,9 @@ def train(postagger, train_config, dataset, save_path):
     hist_chars_mask = tensor.matrix('hist_chars_mask')
     hist_word_mask = tensor.matrix('hist_word_mask')
 
-    pos_cost, diff_cost = postagger.cost(pos_chars, pos_chars_mask, pos_word_mask, pos_targets,
-                                         norm_chars, norm_chars_mask, norm_word_mask,
-                                         hist_chars, hist_chars_mask, hist_word_mask)
+    pos_cost = postagger.pos_cost(pos_chars, pos_chars_mask, pos_word_mask, pos_targets)
+    diff_cost = postagger.diff_cost(norm_chars, norm_chars_mask, norm_word_mask,
+                                    hist_chars, hist_chars_mask, hist_word_mask)
     cost = train_config.pos_weight * pos_cost + (1.0 - train_config.pos_weight) * diff_cost
     cost.name = "cost"
     logger.info("Cost graph is built")
@@ -361,23 +366,58 @@ def train(postagger, train_config, dataset, save_path):
     average_monitoring = TrainingDataMonitoring(
         observables, prefix="average", every_n_batches=25)
 
+    validation_set_monitoring = []
+    if pos_validation_set:
+        pos_val_data_stream = dataset.get_example_stream()
+        pos_val_data_stream = Batch(pos_val_data_stream, iteration_scheme=ConstantScheme(100))
+        pos_val_data_stream = FilterSources(pos_val_data_stream,
+                                            sources=('pos_chars', 'pos_word_mask', 'pos_targets'))
+        pos_val_data_stream = Padding(pos_val_data_stream)
+        pos_val_data_stream = FilterSources(pos_val_data_stream,
+                                            sources=('pos_chars', 'pos_chars_mask', 'pos_word_mask', 'pos_targets'))
+        pos_val_data_stream = Mapping(pos_val_data_stream, _transpose)
+
+        val_pos_cost = pos_cost.copy(name='val_pos_cost')
+
+        pos_monitoring = DataStreamMonitoring([val_pos_cost], pos_val_data_stream)
+        validation_set_monitoring.append(pos_monitoring)
+
+    if hist_validation_set:
+        hist_val_data_stream = dataset.get_example_stream()
+        hist_val_data_stream = Batch(hist_val_data_stream, iteration_scheme=ConstantScheme(100))
+        hist_val_data_stream = FilterSources(hist_val_data_stream,
+                                             sources=('norm_chars', 'norm_word_mask',
+                                                      'hist_chars', 'hist_word_mask'))
+        hist_val_data_stream = Padding(hist_val_data_stream)
+        hist_val_data_stream = FilterSources(hist_val_data_stream,
+                                             sources=('norm_chars', 'norm_chars_mask', 'norm_word_mask',
+                                                      'hist_chars', 'hist_chars_mask', 'hist_word_mask'))
+        hist_val_data_stream = Mapping(hist_val_data_stream, _transpose)
+
+        val_diff_cost = diff_cost.copy(name='val_diff_cost')
+
+        hist_monitoring = DataStreamMonitoring([val_diff_cost], hist_val_data_stream)
+        validation_set_monitoring.append(hist_monitoring)
+
     main_loop = MainLoop(
         model=model,
         data_stream=data_stream,
         algorithm=algorithm,
         extensions=[
-            Timing(),
-            TrainingDataMonitoring(observables, after_batch=True),
-            average_monitoring,
-            FinishAfter(after_n_batches=train_config.num_batches)
-                # This shows a way to handle NaN emerging during
-                # training: simply finish it.
-                .add_condition(["after_batch"], _is_nan),
-            # Saving the model and the log separately is convenient,
-            # because loading the whole pickle takes quite some time.
-            Checkpoint(save_path, every_n_batches=500,
-                       save_separately=["model", "log"]),
-            Printing(every_n_batches=25)])
+                       Timing(),
+                       TrainingDataMonitoring(observables, after_batch=True),
+                       average_monitoring
+                   ] + validation_set_monitoring + [
+                       FinishAfter(after_n_batches=train_config.num_batches)
+                           # This shows a way to handle NaN emerging during
+                           # training: simply finish it.
+                           .add_condition(["after_batch"], _is_nan),
+                       # Saving the model and the log separately is convenient,
+                       # because loading the whole pickle takes quite some time.
+                       Checkpoint(save_path, every_n_batches=500,
+                                  save_separately=["model", "log"]),
+                       Printing(every_n_batches=25)
+                   ])
     main_loop.run()
 
 
@@ -537,6 +577,18 @@ def main():
 
         train_ds = join_training_data(pos_data, hist_data)
 
+        posval_ds = None
+        if train_config.posval_file:
+            with open(train_config.posval_file, 'r') as f:
+                posval_data, _, _ = load_conll(f, chars_voc=chars_voc, pos_voc=pos_voc)
+            posval_ds = IndexableDataset(posval_data)
+
+        histval_ds = None
+        if train_config.histval_file:
+            with open(train_config.histval_file, 'r') as f:
+                histval_data, _ = load_historical(f, chars_voc=chars_voc)
+            histval_ds = IndexableDataset(histval_data)
+
         net_config = HistPOSTaggerConfiguration(alphabet_size=len(chars_voc), pos_dimension=len(pos_voc))
         if args.net_config is not None:
             with open(args.net_config, 'r') as f:
@@ -548,7 +600,8 @@ def main():
         print('Network configuration:\n' + net_config.dump_json(), file=sys.stderr)
 
         save_metadata(args.taggermodel, net_config, chars_voc, pos_voc)
-        train(tagger, train_config, train_ds, args.taggermodel)
+        train(tagger, train_config, train_ds, args.taggermodel,
+              pos_validation_set=posval_ds, hist_validation_set=histval_ds)
     elif args.mode == "predict":
         net_config, chars_voc, pos_voc = load_metadata(args.taggermodel)
         tagger = HistPOSTagger(net_config)
