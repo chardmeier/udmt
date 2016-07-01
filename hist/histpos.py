@@ -375,7 +375,7 @@ def train(postagger, train_config, dataset, save_path, pos_validation_set=None, 
     #     batch_cost, batch_size * max_length).copy(
     #     name="character_log_likelihood")
     observables = [
-         cost, pos_cost, diff_cost,
+         cost, unregularised_cost, pos_cost, diff_cost,
          batch_size, max_pos_length, max_hist_length, max_norm_length,  # cost_per_character,
          algorithm.total_step_norm, algorithm.total_gradient_norm]
     # for name, parameter in parameters.items():
