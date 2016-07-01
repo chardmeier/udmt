@@ -20,9 +20,11 @@ import argparse
 import collections
 import fuel
 import itertools
+import json
 import logging
 import math
 import numpy
+import pickle
 import pprint
 import re
 import sys
@@ -32,27 +34,51 @@ import theano
 logger = logging.getLogger(__name__)
 
 
+class Configuration:
+    def load_json(self, infile):
+        self.__dict__.update(json.load(infile))
+
+    def dump_json(self):
+        return json.dumps(self.__dict__, indent=2)
+
+
+class HistPOSTaggerConfiguration(Configuration):
+    def __init__(self, alphabet_size=None, pos_dimension=None):
+        self.alphabet_size = alphabet_size
+        self.pos_dimension = pos_dimension
+        self.share_embedders = True
+        self.recurrent_type = 'rnn'
+        self.sequence_dims = [50, 150, 51]
+        self.hidden_dims = []
+        self.diff_loss = 'squared_error'
+
+
+class TrainingConfiguration(Configuration):
+    def __init__(self):
+        self.histtrain_file = None
+        self.postrain_file = None
+        self.pos_weight = 0.5
+        self.num_batches = 100000
+        self.step_rule = 'original'
+
+
 class HistPOSTagger(Initializable):
-    def __init__(self, alphabet_size, seq_dimensions, pos_dimension, transition_type,
-                 share_embedders=True, diff_loss='squared_error', hidden_dims=None, **kwargs):
+    def __init__(self, net_config, **kwargs):
         super().__init__(**kwargs)
 
-        hist_embedder = WordEmbedding(alphabet_size, seq_dimensions, transition_type)
+        hist_embedder = WordEmbedding(net_config.alphabet_size, net_config.sequence_dims, net_config.recurrent_type)
         self.children.append(hist_embedder)
 
-        if share_embedders:
+        if net_config.share_embedders:
             norm_embedder = hist_embedder
         else:
-            norm_embedder = WordEmbedding(alphabet_size, seq_dimensions, transition_type)
+            norm_embedder = WordEmbedding(net_config.alphabet_size, net_config.sequence_dims, net_config.recurrent_type)
             self.children.append(norm_embedder)
 
-        if hidden_dims is None:
-            hidden_dims = []
-
-        predictor = TagPredictor([seq_dimensions[-1]] + hidden_dims + [pos_dimension])
+        predictor = TagPredictor([net_config.sequence_dims[-1]] + net_config.hidden_dims + [net_config.pos_dimension])
         self.children.append(predictor)
 
-        self.diff_loss = diff_loss
+        self.diff_loss = net_config.diff_loss
 
         self.norm_embedder = norm_embedder
         self.hist_embedder = hist_embedder
@@ -241,7 +267,7 @@ def join_training_data(pos_data, hist_data):
     return IndexableDataset(all_data)
 
 
-def train(pos_weight, postagger, dataset, num_batches, save_path, step_rule='original'):
+def train(postagger, train_config, dataset, save_path):
     # Data processing pipeline
 
     # dataset.example_iteration_scheme = ShuffledScheme(dataset.num_examples, 10)
@@ -278,7 +304,7 @@ def train(pos_weight, postagger, dataset, num_batches, save_path, step_rule='ori
     pos_cost, diff_cost = postagger.cost(pos_chars, pos_chars_mask, pos_word_mask, pos_targets,
                                          norm_chars, norm_chars_mask, norm_word_mask,
                                          hist_chars, hist_chars_mask, hist_word_mask)
-    cost = pos_weight * pos_cost + (1.0 - pos_weight) * diff_cost
+    cost = train_config.pos_weight * pos_cost + (1.0 - train_config.pos_weight) * diff_cost
     cost.name = "cost"
     logger.info("Cost graph is built")
 
@@ -295,18 +321,18 @@ def train(pos_weight, postagger, dataset, num_batches, save_path, step_rule='ori
     for brick in model.get_top_bricks():
         brick.initialize()
 
-    if step_rule == 'original':
+    if train_config.step_rule == 'original':
         step_rule_obj = CompositeRule([StepClipping(10.0), Scale(0.01)])
-    elif step_rule == 'rmsprop':
+    elif train_config.step_rule == 'rmsprop':
         step_rule_obj = RMSProp(learning_rate=.01)
-    elif step_rule == 'rms+mom':
+    elif train_config.step_rule == 'rms+mom':
         step_rule_obj = CompositeRule([RMSProp(learning_rate=0.01), Momentum(0.9)])
-    elif step_rule == 'adam':
+    elif train_config.step_rule == 'adam':
         step_rule_obj = Adam()
-    elif step_rule == 'adagrad':
+    elif train_config.step_rule == 'adagrad':
         step_rule_obj = AdaGrad()
     else:
-        raise ValueError('Unknow step rule: ' + step_rule)
+        raise ValueError('Unknow step rule: ' + train_config.step_rule)
 
     # Define the training algorithm.
     cg = ComputationGraph(cost)
@@ -343,7 +369,7 @@ def train(pos_weight, postagger, dataset, num_batches, save_path, step_rule='ori
             Timing(),
             TrainingDataMonitoring(observables, after_batch=True),
             average_monitoring,
-            FinishAfter(after_n_batches=num_batches)
+            FinishAfter(after_n_batches=train_config.num_batches)
                 # This shows a way to handle NaN emerging during
                 # training: simply finish it.
                 .add_condition(["after_batch"], _is_nan),
@@ -454,6 +480,21 @@ def evaluate(postagger, dataset, save_path, pos_voc, embedder='norm'):
                fscore[i]))
 
 
+def save_metadata(outfile, net_config, chars_voc, pos_voc):
+    with open(outfile + '.meta', 'wb') as f:
+        pickle.dump(f, net_config)
+        pickle.dump(f, chars_voc)
+        pickle.dump(f, pos_voc)
+
+
+def load_metadata(infile):
+    with open(infile + '.meta', 'rb') as f:
+        net_config = pickle.load(f)
+        chars_voc = pickle.load(f)
+        pos_voc = pickle.load(f)
+    return net_config, chars_voc, pos_voc
+
+
 def main():
     parser = argparse.ArgumentParser(
         "POS tagger",
@@ -469,53 +510,54 @@ def main():
              " is `train` OR path to an `.tar` files with learned"
              " parameters if the mode is `predict`.")
     parser.add_argument(
-        "histtrain",
-        help="the historical training corpus (required for both training and prediction)")
+        "--train-config", required=False,
+        help="Training configuration JSON file.")
     parser.add_argument(
-        "postrain",
-        help="the POS training corpus (required for both training and prediction)")
-    parser.add_argument(
-        "--pos-weight", default=0.5, type=float,
-        help="Weight of pos_cost relative to diff_cost")
-    parser.add_argument(
-        "--no-share-embedders", dest="share_embedders", action="store_false",
-        help="Use different embedding networks for historical and modern text.")
+        "--net-config", required=False,
+        help="Network configuration JSON file (for training mode only).")
     parser.add_argument(
         "--embedder", choices=["norm", "hist"], default="norm",
         help="Embedder to use in prediction and evaluation mode if not shared.")
     parser.add_argument(
-        "--num-batches", default=10000, type=int,
-        help="Train on this many batches.")
-    parser.add_argument(
-        "--recurrent-type", choices=["rnn", "gru", "lstm"], default="rnn",
-        help="The type of recurrent unit to use")
-    parser.add_argument(
-        "--step-rule", choices=["original", "rmsprop", "rms+mom", "adam", "adagrad"], default="original",
-        help="The step rule for the search algorithm")
-    parser.add_argument(
         "--test-file", required=False,
-        help="The file to test on in prediction mode")
+        help="The file to test on in prediction and evaluation mode")
     args = parser.parse_args()
 
-    with open(args.histtrain, 'r') as f:
-        hist_data, chars_voc = load_historical(f)
-
-    with open(args.postrain, 'r') as f:
-        pos_data, _, pos_voc = load_conll(f, chars_voc=chars_voc)
-
-    train_ds = join_training_data(pos_data, hist_data)
-
-    tagger = HistPOSTagger(len(chars_voc), [50, 150, 51], len(pos_voc), args.recurrent_type,
-                           share_embedders=args.share_embedders)
-
     if args.mode == "train":
-        num_batches = args.num_batches
-        train(args.pos_weight, tagger, train_ds, num_batches, args.taggermodel, step_rule=args.step_rule)
+        train_config = TrainingConfiguration()
+        if args.train_config is not None:
+            with open(args.train_config, 'r') as f:
+                train_config.load_json(f)
+
+        with open(train_config.histtrain_file, 'r') as f:
+            hist_data, chars_voc = load_historical(f)
+
+        with open(train_config.postrain_file, 'r') as f:
+            pos_data, _, pos_voc = load_conll(f, chars_voc=chars_voc)
+
+        train_ds = join_training_data(pos_data, hist_data)
+
+        net_config = HistPOSTaggerConfiguration(alphabet_size=len(chars_voc), pos_dimension=len(pos_voc))
+        if args.net_config is not None:
+            with open(args.net_config, 'r') as f:
+                net_config.load_json(f)
+
+        tagger = HistPOSTagger(net_config)
+
+        print('Training configuration:\n' + train_config.dump_json(), file=sys.stderr)
+        print('Network configuration:\n' + net_config.dump_json(), file=sys.stderr)
+
+        save_metadata(args.taggermodel, net_config, chars_voc, pos_voc)
+        train(tagger, train_config, train_ds, args.taggermodel)
     elif args.mode == "predict":
+        net_config, chars_voc, pos_voc = load_metadata(args.taggermodel)
+        tagger = HistPOSTagger(net_config)
         with open(args.test_file, 'r') if args.test_file is not None else sys.stdin as f:
             test_ds = load_vertical(f, chars_voc)
         predict(tagger, test_ds, args.taggermodel, pos_voc, embedder=args.embedder)
     elif args.mode == "eval":
+        net_config, chars_voc, pos_voc = load_metadata(args.taggermodel)
+        tagger = HistPOSTagger(net_config)
         with open(args.test_file, 'r') if args.test_file is not None else sys.stdin as f:
             test_data, _, _ = load_conll(f, chars_voc=chars_voc, pos_voc=pos_voc)
         test_ds = IndexableDataset(test_data)
