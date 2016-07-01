@@ -35,11 +35,14 @@ logger = logging.getLogger(__name__)
 
 
 class HistPOSTagger(Initializable):
-    def __init__(self, alphabet_size, seq_dimensions, pos_dimension, transition_type, **kwargs):
+    def __init__(self, alphabet_size, seq_dimensions, pos_dimension, transition_type,
+                 diff_loss='squared_error', **kwargs):
         super().__init__(**kwargs)
 
         embedder = WordEmbedding(alphabet_size, seq_dimensions, transition_type)
         predictor = TagPredictor(seq_dimensions[-1], pos_dimension)
+
+        self.diff_loss = diff_loss
 
         self.embedder = embedder
         self.predictor = predictor
@@ -63,7 +66,14 @@ class HistPOSTagger(Initializable):
         norm_enc_trunc = norm_encoded[0:min_length, :]
         hist_enc_trunc = hist_encoded[0:min_length, :]
 
-        diff_cost = (collected_mask * tensor.sqr(norm_enc_trunc - hist_enc_trunc).sum(axis=2)).sum(axis=0).mean()
+        if self.diff_loss == 'squared_error':
+            diff_cost = (collected_mask * tensor.sqr(norm_enc_trunc - hist_enc_trunc).sum(axis=2)).sum(axis=0).mean()
+        elif self.diff_loss == 'crossentropy':
+            diff_cost = (collected_mask *
+                         (norm_enc_trunc * tensor.log(hist_enc_trunc) +
+                          ((1.0 - norm_enc_trunc) * tensor.log(1.0 - hist_enc_trunc))).sum(axis=2)).sum(axis=0).mean()
+        else:
+            raise ValueError
 
         return pos_cost, diff_cost
 
