@@ -74,7 +74,13 @@ class HistPOSTagger(Initializable):
 
 
 def _transpose(data):
-    return tuple(array.T if array.ndim == 2 else array.transpose(1, 0, 2) for array in data)
+    # Flip the first two dimensions regardless of total dimensionality
+    maxdim = max(array.ndim for array in data)
+    if maxdim == 1:
+        return data
+    perm = list(range(maxdim))
+    perm[0:2] = [1, 0]
+    return tuple(array if array.ndim == 1 else array.transpose(perm[0:array.ndim]) for array in data)
 
 
 def _is_nan(log):
