@@ -72,13 +72,15 @@ class HistPOSTagger(Initializable):
     def __init__(self, net_config, **kwargs):
         super().__init__(**kwargs)
 
-        hist_embedder = WordEmbedding(net_config.alphabet_size, net_config.sequence_dims, net_config.recurrent_type)
-        self.children.append(hist_embedder)
-
         if net_config.share_embedders:
+            hist_embedder = WordEmbedding(net_config.alphabet_size, net_config.sequence_dims, net_config.recurrent_type)
+            self.children.append(hist_embedder)
             norm_embedder = hist_embedder
         else:
-            norm_embedder = WordEmbedding(net_config.alphabet_size, net_config.sequence_dims, net_config.recurrent_type)
+            hist_embedder = WordEmbedding(net_config.alphabet_size, net_config.sequence_dims, net_config.recurrent_type, name='hist_embedder')
+            self.children.append(hist_embedder)
+
+            norm_embedder = WordEmbedding(net_config.alphabet_size, net_config.sequence_dims, net_config.recurrent_type, name='norm_embedder')
             self.children.append(norm_embedder)
 
         predictor = TagPredictor([net_config.sequence_dims[-1]] + net_config.hidden_dims + [net_config.pos_dimension])
