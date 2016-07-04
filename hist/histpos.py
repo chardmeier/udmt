@@ -1,9 +1,11 @@
 from blocks.algorithms import (GradientDescent, Scale,
                                StepClipping, CompositeRule, RMSProp, Adam, Momentum, AdaGrad)
 from blocks.bricks import application, Initializable
-from blocks.extensions import FinishAfter, Printing, Timing
+from blocks.extensions import FinishAfter, Printing, SimpleExtension, Timing
 from blocks.extensions.monitoring import DataStreamMonitoring, TrainingDataMonitoring
 from blocks.extensions.saveload import Checkpoint
+from blocks.extensions.stopping import FinishIfNoImprovementAfter
+from blocks.extensions.training import TrackTheBest
 from blocks.filter import VariableFilter
 from blocks.graph import apply_dropout, ComputationGraph
 from blocks.initialization import Constant, IsotropicGaussian
@@ -61,6 +63,7 @@ class TrainingConfiguration(Configuration):
         self.postrain_file = None
         self.histval_file = None
         self.posval_file = None
+        self.early_stopping = None
         self.pos_weight = 0.5
         self.num_batches = 100000
         self.step_rule = 'original'
@@ -279,6 +282,21 @@ def join_training_data(pos_data, hist_data):
     return IndexableDataset(all_data)
 
 
+class ValidationCostCombiner(SimpleExtension):
+    def __init__(self, pos_weight, **kwargs):
+        self.pos_weight = pos_weight
+        kwargs.setdefault("after_epoch", True)
+        super().__init__(**kwargs)
+
+    def do(self, which_callback, *args):
+        val_pos_cost = self.main_loop.log.current_row.get('val_pos_cost')
+        val_diff_cost = self.main_loop.log.current_row.get('val_diff_cost')
+        if val_pos_cost is None or val_diff_cost is None:
+            return
+        val_cost = self.pos_weight * val_pos_cost + (1.0 - self.pos_weight) * val_diff_cost
+        self.main_loop.log.current_row['val_cost'] = val_cost
+
+
 def train(postagger, train_config, dataset, save_path, pos_validation_set=None, hist_validation_set=None):
     # Data processing pipeline
 
@@ -422,6 +440,19 @@ def train(postagger, train_config, dataset, save_path, pos_validation_set=None, 
 
         hist_monitoring = DataStreamMonitoring([val_diff_cost], hist_val_data_stream)
         validation_set_monitoring.append(hist_monitoring)
+
+    if pos_validation_set and hist_validation_set:
+        combine_cost = ValidationCostCombiner(train_config.pos_weight)
+        validation_set_monitoring.append(combine_cost)
+
+    if train_config.early_stopping == "val_cost":
+        if not (pos_validation_set and hist_validation_set):
+            raise ValueError("Need both hist and pos validation sets for early stopping.")
+        tracker = TrackTheBest('val_cost')
+        saver = Checkpoint(save_path + '.best', after_epoch=True, save_separately=['model', 'log']).\
+            add_condition(['after_epoch'], lambda log: log.current_row.get('val_cost_best_so_far'))
+        stopper = FinishIfNoImprovementAfter('val_cost_best_so_far', epochs=10)
+        validation_set_monitoring.extend([tracker, saver, stopper])
 
     main_loop = MainLoop(
         model=model,
