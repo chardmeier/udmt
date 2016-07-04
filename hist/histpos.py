@@ -75,13 +75,15 @@ class HistPOSTagger(Initializable):
     def __init__(self, net_config, **kwargs):
         super().__init__(**kwargs)
 
-        hist_embedder = WordEmbedding(net_config.alphabet_size, net_config.sequence_dims, net_config.recurrent_type)
-        self.children.append(hist_embedder)
-
         if net_config.share_embedders:
+            hist_embedder = WordEmbedding(net_config.alphabet_size, net_config.sequence_dims, net_config.recurrent_type)
+            self.children.append(hist_embedder)
             norm_embedder = hist_embedder
         else:
-            norm_embedder = WordEmbedding(net_config.alphabet_size, net_config.sequence_dims, net_config.recurrent_type)
+            hist_embedder = WordEmbedding(net_config.alphabet_size, net_config.sequence_dims, net_config.recurrent_type, name='hist_embedder')
+            self.children.append(hist_embedder)
+
+            norm_embedder = WordEmbedding(net_config.alphabet_size, net_config.sequence_dims, net_config.recurrent_type, name='norm_embedder')
             self.children.append(norm_embedder)
 
         predictor = TagPredictor([net_config.sequence_dims[-1]] + net_config.hidden_dims + [net_config.pos_dimension])
@@ -411,7 +413,7 @@ def train(postagger, train_config, dataset, save_path, pos_validation_set=None, 
     validation_set_monitoring = []
     if pos_validation_set:
         pos_val_data_stream = pos_validation_set.get_example_stream()
-        pos_val_data_stream = Batch(pos_val_data_stream, iteration_scheme=ConstantScheme(100))
+        pos_val_data_stream = Batch(pos_val_data_stream, iteration_scheme=ConstantScheme(30))
         pos_val_data_stream = FilterSources(pos_val_data_stream,
                                             sources=('pos_chars', 'pos_word_mask', 'pos_targets'))
         pos_val_data_stream = Padding(pos_val_data_stream)
@@ -426,7 +428,7 @@ def train(postagger, train_config, dataset, save_path, pos_validation_set=None, 
 
     if hist_validation_set:
         hist_val_data_stream = hist_validation_set.get_example_stream()
-        hist_val_data_stream = Batch(hist_val_data_stream, iteration_scheme=ConstantScheme(100))
+        hist_val_data_stream = Batch(hist_val_data_stream, iteration_scheme=ConstantScheme(30))
         hist_val_data_stream = FilterSources(hist_val_data_stream,
                                              sources=('norm_chars', 'norm_word_mask',
                                                       'hist_chars', 'hist_word_mask'))
