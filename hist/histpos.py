@@ -457,7 +457,7 @@ def train(postagger, train_config, dataset, save_path, pos_validation_set=None, 
         tracker = TrackTheBest('val_cost')
         saver = Checkpoint(save_path + '.best', after_epoch=True, save_separately=['model', 'log']).\
             add_condition(['after_epoch'], _best_so_far_flag)
-        stopper = FinishIfNoImprovementAfter('val_cost_best_so_far', epochs=10)
+        stopper = FinishIfNoImprovementAfter('val_cost_best_so_far', epochs=20)
         validation_set_monitoring.extend([tracker, saver, stopper])
 
     main_loop = MainLoop(
