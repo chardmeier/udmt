@@ -157,6 +157,10 @@ def _is_nan(log):
     return math.isnan(log.current_row['total_gradient_norm'])
 
 
+def _best_so_far_flag(log):
+    return log.current_row.get('val_cost_best_so_far')
+
+
 def load_conll(infile, chars_voc=None, pos_voc=None):
     seqs = []
     for tr in conll_trees(infile):
@@ -452,7 +456,7 @@ def train(postagger, train_config, dataset, save_path, pos_validation_set=None, 
             raise ValueError("Need both hist and pos validation sets for early stopping.")
         tracker = TrackTheBest('val_cost')
         saver = Checkpoint(save_path + '.best', after_epoch=True, save_separately=['model', 'log']).\
-            add_condition(['after_epoch'], lambda log: log.current_row.get('val_cost_best_so_far'))
+            add_condition(['after_epoch'], _best_so_far_flag)
         stopper = FinishIfNoImprovementAfter('val_cost_best_so_far', epochs=10)
         validation_set_monitoring.extend([tracker, saver, stopper])
 
