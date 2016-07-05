@@ -605,14 +605,13 @@ def train_crf(postagger, tagger_model, train_config, dataset, embedder='norm'):
 
     crf_x_list = []
     crf_y_list = []
-    max_seqlen = 0
     for i_chars, i_chars_mask, i_word_mask, i_pos in data_stream.get_epoch_iterator():
         o_pos, o_mask = tag_fn(i_chars, i_chars_mask, i_word_mask)
-        max_seqlen = max(max_seqlen, i_pos.shape[0])
         crf_x_list.extend(o_pos[:, i, :] for i in range(o_pos.shape[1]))
         crf_y_list.extend(i_pos.transpose())
 
     nexamples = len(crf_x_list)
+    max_seqlen = max(y.shape[1] for y in crf_y_list)
     npos = crf_x_list[0].shape[1]
 
     crf_x = numpy.zeros((nexamples, max_seqlen, npos))
