@@ -528,7 +528,7 @@ def predict(postagger, dataset, save_path, pos_voc, embedder='norm', use_crf=Fal
             print()
 
 
-def evaluate(postagger, dataset, save_path, pos_voc, embedder='norm'):
+def evaluate(postagger, dataset, save_path, pos_voc, embedder='norm', use_crf=False):
     data_stream = dataset.get_example_stream()
     data_stream = Batch(data_stream, iteration_scheme=ConstantScheme(50))
     data_stream = FilterSources(data_stream, sources=('pos_chars', 'pos_word_mask', 'pos_targets'))
@@ -548,6 +548,11 @@ def evaluate(postagger, dataset, save_path, pos_voc, embedder='norm'):
 
     tag_fn = theano.function(inputs=[chars, chars_mask, word_mask], outputs=[pos, out_mask])
 
+    crf = None
+    if use_crf:
+        with open(save_path + '.crf', 'rb') as f:
+            crf = pickle.load(f)
+
     npos = len(pos_voc)
 
     # total = 0
@@ -559,7 +564,11 @@ def evaluate(postagger, dataset, save_path, pos_voc, embedder='norm'):
 
     for i_chars, i_chars_mask, i_word_mask, i_pos_idx in data_stream.get_epoch_iterator():
         o_pos, o_mask = tag_fn(i_chars, i_chars_mask, i_word_mask)
-        o_pos_idx = numpy.argmax(o_pos, axis=-1)
+        if use_crf:
+            crf_x = [o_pos[:, i, :] for i in range(o_pos.shape[1])]
+            o_pos_idx = numpy.asarray(crf.predict(crf_x)).transpose()
+        else:
+            o_pos_idx = numpy.argmax(o_pos, axis=-1)
 
         # total += o_mask.sum()
         # matches += ((i_pos_idx == o_pos_idx) * o_mask).sum()
