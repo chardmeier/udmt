@@ -555,9 +555,6 @@ def evaluate(postagger, dataset, save_path, pos_voc, embedder='norm', use_crf=Fa
 
     npos = len(pos_voc)
 
-    # total = 0
-    # matches = 0
-
     gold_table = numpy.zeros((npos,))
     pred_table = numpy.zeros((npos,))
     hit_table = numpy.zeros((npos,))
@@ -569,9 +566,6 @@ def evaluate(postagger, dataset, save_path, pos_voc, embedder='norm', use_crf=Fa
             o_pos_idx = numpy.asarray(crf.predict(crf_x)).transpose()
         else:
             o_pos_idx = numpy.argmax(o_pos, axis=-1)
-
-        # total += o_mask.sum()
-        # matches += ((i_pos_idx == o_pos_idx) * o_mask).sum()
 
         fmask = numpy.flatnonzero(o_mask)
         fgold = i_pos_idx.flatten()[fmask]
