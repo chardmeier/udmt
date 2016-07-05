@@ -18,7 +18,7 @@ def main():
                 pos,
                 pos,
                 morph,
-                '_',
+                '0',
                 '_',
                 '_',
                 misc
