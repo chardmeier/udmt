@@ -17,7 +17,9 @@ from dependency import conll_trees
 from fuel.transformers import Batch, FilterSources, Mapping, Padding
 from fuel.datasets import IndexableDataset
 from fuel.schemes import ConstantScheme
+from hist.chain_crf import ChainCRF
 from hist.tagger import load_vertical, TagPredictor, WordEmbedding
+from pystruct.learners import FrankWolfeSSVM
 from theano import tensor
 
 import argparse
@@ -69,6 +71,7 @@ class TrainingConfiguration(Configuration):
         self.step_rule = 'original'
         self.l2_penalty = 0.0
         self.dropout_rate = 0.0
+        self.crf_c = 1.0
 
 
 class HistPOSTagger(Initializable):
@@ -581,6 +584,51 @@ def evaluate(postagger, dataset, save_path, pos_voc, embedder='norm'):
                fscore[i]))
 
 
+def train_crf(postagger, tagger_model, train_config, dataset, embedder='norm'):
+    data_stream = dataset.get_example_stream()
+    data_stream = Batch(data_stream, iteration_scheme=ConstantScheme(50))
+    data_stream = FilterSources(data_stream, sources=('pos_chars', 'pos_word_mask', 'pos_targets'))
+    data_stream = Padding(data_stream, mask_sources=('pos_chars', 'pos_word_mask', 'pos_targets'))
+    data_stream = FilterSources(data_stream, sources=('pos_chars', 'pos_chars_mask', 'pos_word_mask', 'pos_targets'))
+    data_stream = Mapping(data_stream, _transpose)
+
+    chars = tensor.lmatrix('pos_chars')
+    chars_mask = tensor.matrix('pos_chars_mask')
+    word_mask = tensor.matrix('pos_word_mask')
+    pos, out_mask = postagger.apply(embedder, chars, chars_mask, word_mask)
+
+    model = Model(pos)
+    with open(tagger_model, 'rb') as f:
+        model.set_parameter_values(load_parameters(f))
+
+    tag_fn = theano.function(inputs=[chars, chars_mask, word_mask], outputs=[pos, out_mask])
+
+    crf_x_list = []
+    crf_y_list = []
+    max_seqlen = 0
+    for i_chars, i_chars_mask, i_word_mask, i_pos in data_stream.get_epoch_iterator():
+        o_pos, o_mask = tag_fn(i_chars, i_chars_mask, i_word_mask)
+        max_seqlen = max(max_seqlen, i_pos.shape[0])
+        crf_x_list.extend(o_pos[:, i, :] for i in range(o_pos.shape[1]))
+        crf_y_list.extend(i_pos.transpose())
+
+    nexamples = len(crf_x_list)
+    npos = crf_x_list[0].shape[1]
+
+    crf_x = numpy.zeros((nexamples, max_seqlen, npos))
+    crf_y = numpy.zeros((nexamples, max_seqlen), dtype=numpy.int32)
+    for i, (x, y) in enumerate(zip(crf_x_list, crf_y_list)):
+        this_len = min(max_seqlen, x.shape[0], y.shape[0])
+        crf_x[i, :this_len, :] = x[:this_len, :]
+        crf_y[i, :this_len] = y[:this_len]
+
+    crf = FrankWolfeSSVM(model=ChainCRF(n_states=npos), C=train_config.crf_c, max_iter=10)
+    crf.fit(crf_x, crf_y)
+
+    with open(tagger_model + '.crf', 'wb') as f:
+        pickle.dump(crf, f)
+
+
 def save_metadata(outfile, net_config, chars_voc, pos_voc):
     with open(outfile + '.meta', 'wb') as f:
         pickle.dump(net_config, f)
@@ -601,7 +649,7 @@ def main():
         "POS tagger",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument(
-        "mode", choices=["train", "predict", "eval"],
+        "mode", choices=["train", "predict", "eval", "train-crf"],
         help="The mode to run. In the `train` mode a model is trained."
              " In the `predict` mode a trained model is "
              " to used to tag the input text.")
@@ -676,6 +724,19 @@ def main():
             test_data, _, _ = load_conll(f, chars_voc=chars_voc, pos_voc=pos_voc)
         test_ds = IndexableDataset(test_data)
         evaluate(tagger, test_ds, args.taggermodel, pos_voc, embedder=args.embedder)
+    elif args.mode == "train-crf":
+        train_config = TrainingConfiguration()
+        if args.train_config is not None:
+            with open(args.train_config, 'r') as f:
+                train_config.load_json(f)
+
+        net_config, chars_voc, pos_voc = load_metadata(args.taggermodel)
+        tagger = HistPOSTagger(net_config)
+        with open(train_config.postrain_file, 'r') as f:
+            pos_data, _, _ = load_conll(f, pos_voc=pos_voc, chars_voc=chars_voc)
+
+        train_ds = IndexableDataset(pos_data)
+        train_crf(tagger, args.taggermodel, train_config, train_ds)
 
 
 if __name__ == '__main__':
