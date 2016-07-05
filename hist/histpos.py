@@ -30,6 +30,7 @@ import json
 import logging
 import math
 import numpy
+import os
 import pickle
 import pprint
 import re
@@ -485,7 +486,7 @@ def train(postagger, train_config, dataset, save_path, pos_validation_set=None, 
     main_loop.run()
 
 
-def predict(postagger, dataset, save_path, pos_voc, embedder='norm'):
+def predict(postagger, dataset, save_path, pos_voc, embedder='norm', use_crf=False):
     data_stream = dataset.get_example_stream()
     data_stream = Batch(data_stream, iteration_scheme=ConstantScheme(50))
     data_stream = Padding(data_stream, mask_sources=('chars', 'word_mask'))
@@ -505,9 +506,19 @@ def predict(postagger, dataset, save_path, pos_voc, embedder='norm'):
 
     reverse_pos = {idx: word for word, idx in pos_voc.items()}
 
+    crf = None
+    if use_crf:
+        with open(save_path + '.crf', 'rb') as f:
+            crf = pickle.load(f)
+
     for i_words, i_chars, i_chars_mask, i_word_mask in data_stream.get_epoch_iterator():
         o_pos, o_mask = tag_fn(i_chars, i_chars_mask, i_word_mask)
-        o_pos_idx = numpy.argmax(o_pos, axis=-1)
+        if use_crf:
+            crf_x = [o_pos[:, i, :] for i in range(o_pos.shape[1])]
+            o_pos_idx = numpy.asarray(crf.predict(crf_x)).transpose()
+        else:
+            o_pos_idx = numpy.argmax(o_pos, axis=-1)
+
         for sntno in range(o_pos_idx.shape[1]):
             words = i_words[sntno]
             tags = [reverse_pos[o_pos_idx[i, sntno]] for i in range(o_pos_idx.shape[0]) if o_mask[i, sntno]]
@@ -715,7 +726,8 @@ def main():
         tagger = HistPOSTagger(net_config)
         with open(args.test_file, 'r') if args.test_file is not None else sys.stdin as f:
             test_ds = load_vertical(f, chars_voc)
-        predict(tagger, test_ds, args.taggermodel, pos_voc, embedder=args.embedder)
+        use_crf = os.path.isfile(args.taggermodel + '.crf')
+        predict(tagger, test_ds, args.taggermodel, pos_voc, embedder=args.embedder, use_crf=use_crf)
     elif args.mode == "eval":
         net_config, chars_voc, pos_voc = load_metadata(args.taggermodel)
         tagger = HistPOSTagger(net_config)
