@@ -683,6 +683,9 @@ def main():
     parser.add_argument(
         "--test-file", required=False,
         help="The file to test on in prediction and evaluation mode")
+    parser.add_argument(
+        "--no-crf", action="store_false", dest="use_crf",
+        help="Don't use CRF for prediction even if available.")
     args = parser.parse_args()
 
     if args.mode == "train":
@@ -729,7 +732,7 @@ def main():
         tagger = HistPOSTagger(net_config)
         with open(args.test_file, 'r') if args.test_file is not None else sys.stdin as f:
             test_ds = load_vertical(f, chars_voc)
-        use_crf = os.path.isfile(args.taggermodel + '.crf')
+        use_crf = args.use_crf and os.path.isfile(args.taggermodel + '.crf')
         predict(tagger, test_ds, args.taggermodel, pos_voc, embedder=args.embedder, use_crf=use_crf)
     elif args.mode == "eval":
         net_config, chars_voc, pos_voc = load_metadata(args.taggermodel)
@@ -737,7 +740,8 @@ def main():
         with open(args.test_file, 'r') if args.test_file is not None else sys.stdin as f:
             test_data, _, _ = load_conll(f, chars_voc=chars_voc, pos_voc=pos_voc)
         test_ds = IndexableDataset(test_data)
-        evaluate(tagger, test_ds, args.taggermodel, pos_voc, embedder=args.embedder)
+        use_crf = args.use_crf and os.path.isfile(args.taggermodel + '.crf')
+        evaluate(tagger, test_ds, args.taggermodel, pos_voc, embedder=args.embedder, use_crf=use_crf)
     elif args.mode == "train-crf":
         train_config = TrainingConfiguration()
         if args.train_config is not None:
