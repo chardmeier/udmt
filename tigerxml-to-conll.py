@@ -12,7 +12,7 @@ def main():
             lemma = t['lemma']
             misc = t['ntype'] if t['ntype'] != '--' else '_'
             conll_line = '\t'.join([
-                i + 1,
+                str(i + 1),
                 word,
                 lemma,
                 pos,
