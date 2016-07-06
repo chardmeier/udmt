@@ -66,6 +66,7 @@ class TrainingConfiguration(Configuration):
         self.postrain_file = None
         self.histval_file = None
         self.posval_file = None
+        self.approx_nwords = None
         self.early_stopping = None
         self.pos_weight = 0.5
         self.num_batches = 100000
@@ -165,7 +166,7 @@ def _best_so_far_flag(log):
     return log.current_row.get('val_cost_best_so_far')
 
 
-def load_conll(infile, chars_voc=None, pos_voc=None):
+def load_conll(infile, chars_voc=None, pos_voc=None, approx_nwords=None):
     seqs = []
     for tr in conll_trees(infile):
         seqs.append([(n.token, n.pos) for n in tr[1:]])
@@ -193,16 +194,34 @@ def load_conll(infile, chars_voc=None, pos_voc=None):
     chars = []
     pos = []
     word_mask = []
+    split_points = None
     for snt in seqs:
         snt_words = [word_tag[0] for word_tag in snt]
         snt_chars = [chars_voc['<S>']]
         snt_pos = [pos_voc['<S>']]
         snt_word_mask = [one]
-        for word, postag in snt:
+
+        if approx_nwords:
+            chunk_len = len(snt_words) // (len(snt_words) // approx_nwords) + 1
+            split_points = list(range(0, len(snt_words), chunk_len))
+
+        for i, (word, postag) in enumerate(snt):
             snt_chars.extend(chars_voc.get(c, chars_voc['<UNK>']) for c in word)
             snt_chars.append(chars_voc[' '])
             snt_word_mask.extend([zero] * len(word) + [one])
             snt_pos.append(pos_voc.get(postag, pos_voc['<UNK>']))
+
+            if i in split_points:
+                words.append(snt_words)
+                chars.append(snt_chars)
+                pos.append(snt_pos)
+                word_mask.append(snt_word_mask)
+
+                snt_words = []
+                snt_chars = []
+                snt_pos = []
+                snt_word_mask = []
+
         snt_chars.append(chars_voc['</S>'])
         snt_pos.append(pos_voc['</S>'])
         snt_word_mask.append(one)
@@ -221,7 +240,7 @@ def load_conll(infile, chars_voc=None, pos_voc=None):
     return data, chars_voc, pos_voc
 
 
-def load_historical(infile, chars_voc=None):
+def load_historical(infile, chars_voc=None, approx_nwords=None):
     floatx_vals = numpy.arange(2, dtype=fuel.config.floatX)
     zero = floatx_vals[0]
     one = floatx_vals[1]
@@ -240,6 +259,7 @@ def load_historical(infile, chars_voc=None):
         chars_voc['</S>'] = 2
         chars_voc[' '] = 3
 
+    split_points = None
     all_hist = []
     all_norm = []
     all_hist_word_mask = []
@@ -249,6 +269,11 @@ def load_historical(infile, chars_voc=None):
         norm_chars = [chars_voc['<S>']]
         hist_word_mask = [one]
         norm_word_mask = [one]
+
+        if approx_nwords:
+            chunk_len = len(snt_words) // (len(snt_words) // approx_nwords) + 1
+            split_points = list(range(0, len(snt_words), chunk_len))
+
         for i, (hist, norm) in enumerate(snt_pairs):
             hist_word = list(chars_voc.get(c, chars_voc['<UNK>']) for c in hist)
             hist_chars.extend(hist_word)
@@ -258,6 +283,18 @@ def load_historical(infile, chars_voc=None):
             norm_chars.extend(norm_word)
             norm_chars.append(chars_voc[' '])
             norm_word_mask.extend([zero] * len(norm) + [one])
+
+            if i in split_points:
+                all_hist.append(hist_chars)
+                all_norm.append(norm_chars)
+                all_hist_word_mask.append(hist_word_mask)
+                all_norm_word_mask.append(norm_word_mask)
+
+                hist_chars = []
+                norm_chars = []
+                hist_word_mask = []
+                norm_word_mask = []
+
         hist_chars[-1] = chars_voc['</S>']
         norm_chars[-1] = chars_voc['</S>']
 
@@ -695,10 +732,10 @@ def main():
                 train_config.load_json(f)
 
         with open(train_config.histtrain_file, 'r') as f:
-            hist_data, chars_voc = load_historical(f)
+            hist_data, chars_voc = load_historical(f, approx_nwords=train_config.approx_nwords)
 
         with open(train_config.postrain_file, 'r') as f:
-            pos_data, _, pos_voc = load_conll(f, chars_voc=chars_voc)
+            pos_data, _, pos_voc = load_conll(f, chars_voc=chars_voc, approx_nwords=train_config.approx_nwords)
 
         train_ds = join_training_data(pos_data, hist_data)
 
