@@ -21,6 +21,8 @@ from hist.chain_crf import ChainCRF
 from hist.tagger import load_vertical, TagPredictor, WordEmbedding
 from pystruct.learners import FrankWolfeSSVM
 from theano import tensor
+from theano.compile.nanguardmode import NanGuardMode
+from theano.tensor.nnet import sigmoid
 
 import argparse
 import collections
@@ -57,7 +59,6 @@ class HistPOSTaggerConfiguration(Configuration):
         self.recurrent_type = 'rnn'
         self.sequence_dims = [50, 150, 51]
         self.hidden_dims = []
-        self.diff_loss = 'squared_error'
 
 
 class TrainingConfiguration(Configuration):
@@ -75,10 +76,11 @@ class TrainingConfiguration(Configuration):
         self.l2_penalty = 0.0
         self.dropout_rate = 0.0
         self.crf_c = 1.0
+        self.diff_loss = 'squared_error'
 
 
 class HistPOSTagger(Initializable):
-    def __init__(self, net_config, **kwargs):
+    def __init__(self, net_config, diff_loss='squared_error', **kwargs):
         super().__init__(**kwargs)
 
         if net_config.share_embedders:
@@ -95,7 +97,7 @@ class HistPOSTagger(Initializable):
         predictor = TagPredictor([net_config.sequence_dims[-1]] + net_config.hidden_dims + [net_config.pos_dimension])
         self.children.append(predictor)
 
-        self.diff_loss = net_config.diff_loss
+        self.diff_loss = diff_loss
 
         self.norm_embedder = norm_embedder
         self.hist_embedder = hist_embedder
@@ -125,9 +127,10 @@ class HistPOSTagger(Initializable):
         if self.diff_loss == 'squared_error':
             diff_cost = (collected_mask * tensor.sqr(norm_enc_trunc - hist_enc_trunc).sum(axis=2)).sum(axis=0).mean()
         elif self.diff_loss == 'crossentropy':
-            # Convert tanh to logistic sigmoid to get the correct range for crossentropy.
-            norm_enc_trunc = 0.5 * norm_enc_trunc + 1.0
-            hist_enc_trunc = 0.5 * hist_enc_trunc + 1.0
+            # Convert embeddings to logistic sigmoid to get the correct range for crossentropy.
+            norm_enc_trunc = sigmoid(norm_enc_trunc)
+            # Clip hist_enc to safe range because of logarithm.
+            hist_enc_trunc = tensor.clip(sigmoid(hist_enc_trunc), 1e-10, 1.0 - 1e-7)
             diff_cost = (collected_mask *
                          (norm_enc_trunc * tensor.log(hist_enc_trunc) +
                           ((1.0 - norm_enc_trunc) * tensor.log(1.0 - hist_enc_trunc))).sum(axis=2)).sum(axis=0).mean()
@@ -438,7 +441,10 @@ def train(postagger, train_config, dataset, save_path,
         raise ValueError('Unknow step rule: ' + train_config.step_rule)
 
     # Define the training algorithm.
-    algorithm = GradientDescent(cost=cost, parameters=cg.parameters, step_rule=step_rule_obj)
+    algorithm = GradientDescent(cost=cost, parameters=cg.parameters, step_rule=step_rule_obj,
+                                theano_func_kwargs={'mode': NanGuardMode(nan_is_error=True,
+                                                                         inf_is_error=True,
+                                                                         big_is_error=True)})
 
     # Fetch variables useful for debugging
     batch_size = pos_chars.shape[1].copy(name="batch_size")
@@ -763,7 +769,7 @@ def main():
             with open(args.net_config, 'r') as f:
                 net_config.load_json(f)
 
-        tagger = HistPOSTagger(net_config)
+        tagger = HistPOSTagger(net_config, diff_loss=train_config.diff_loss)
 
         print('Training configuration:\n' + train_config.dump_json(), file=sys.stderr)
         print('Network configuration:\n' + net_config.dump_json(), file=sys.stderr)
