@@ -468,7 +468,7 @@ def train(postagger, train_config, dataset, save_path, pos_validation_set=None, 
 
         val_pos_cost = pos_cost.copy(name='val_pos_cost')
 
-        pos_monitoring = DataStreamMonitoring([val_pos_cost], pos_val_data_stream)
+        pos_monitoring = DataStreamMonitoring([val_pos_cost], pos_val_data_stream, after_n_batches=500)
         validation_set_monitoring.append(pos_monitoring)
 
     if hist_validation_set:
@@ -485,7 +485,7 @@ def train(postagger, train_config, dataset, save_path, pos_validation_set=None, 
 
         val_diff_cost = diff_cost.copy(name='val_diff_cost')
 
-        hist_monitoring = DataStreamMonitoring([val_diff_cost], hist_val_data_stream)
+        hist_monitoring = DataStreamMonitoring([val_diff_cost], hist_val_data_stream, after_n_batches=500)
         validation_set_monitoring.append(hist_monitoring)
 
     if pos_validation_set and hist_validation_set:
