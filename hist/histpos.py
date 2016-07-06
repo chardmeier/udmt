@@ -202,7 +202,7 @@ def load_conll(infile, chars_voc=None, pos_voc=None, approx_nwords=None):
         snt_word_mask = [one]
 
         if approx_nwords:
-            chunk_len = len(snt_words) // (len(snt_words) // approx_nwords) + 1
+            chunk_len = len(snt_words) // (len(snt_words) // approx_nwords + 1) + 1
             split_points = list(range(0, len(snt_words), chunk_len))
 
         for i, (word, postag) in enumerate(snt):
@@ -271,7 +271,7 @@ def load_historical(infile, chars_voc=None, approx_nwords=None):
         norm_word_mask = [one]
 
         if approx_nwords:
-            chunk_len = len(snt_pairs) // (len(snt_pairs) // approx_nwords) + 1
+            chunk_len = len(snt_pairs) // (len(snt_pairs) // approx_nwords + 1) + 1
             split_points = list(range(0, len(snt_pairs), chunk_len))
 
         for i, (hist, norm) in enumerate(snt_pairs):
