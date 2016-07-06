@@ -194,7 +194,7 @@ def load_conll(infile, chars_voc=None, pos_voc=None, approx_nwords=None):
     chars = []
     pos = []
     word_mask = []
-    split_points = None
+    split_points = []
     for snt in seqs:
         snt_words = [word_tag[0] for word_tag in snt]
         snt_chars = [chars_voc['<S>']]
@@ -259,7 +259,7 @@ def load_historical(infile, chars_voc=None, approx_nwords=None):
         chars_voc['</S>'] = 2
         chars_voc[' '] = 3
 
-    split_points = None
+    split_points = []
     all_hist = []
     all_norm = []
     all_hist_word_mask = []
@@ -271,8 +271,8 @@ def load_historical(infile, chars_voc=None, approx_nwords=None):
         norm_word_mask = [one]
 
         if approx_nwords:
-            chunk_len = len(snt_words) // (len(snt_words) // approx_nwords) + 1
-            split_points = list(range(0, len(snt_words), chunk_len))
+            chunk_len = len(snt_pairs) // (len(snt_pairs) // approx_nwords) + 1
+            split_points = list(range(0, len(snt_pairs), chunk_len))
 
         for i, (hist, norm) in enumerate(snt_pairs):
             hist_word = list(chars_voc.get(c, chars_voc['<UNK>']) for c in hist)
