@@ -489,16 +489,16 @@ def train(postagger, train_config, dataset, save_path, pos_validation_set=None, 
         validation_set_monitoring.append(hist_monitoring)
 
     if pos_validation_set and hist_validation_set:
-        combine_cost = ValidationCostCombiner(train_config.pos_weight)
+        combine_cost = ValidationCostCombiner(train_config.pos_weight, after_n_batches=500)
         validation_set_monitoring.append(combine_cost)
 
     if train_config.early_stopping == "val_cost":
         if not (pos_validation_set and hist_validation_set):
             raise ValueError("Need both hist and pos validation sets for early stopping.")
         tracker = TrackTheBest('val_cost')
-        saver = Checkpoint(save_path + '.best', after_epoch=True, save_separately=['model', 'log']).\
+        saver = Checkpoint(save_path + '.best', after_n_batches=500, save_separately=['model', 'log']).\
             add_condition(['after_epoch'], _best_so_far_flag)
-        stopper = FinishIfNoImprovementAfter('val_cost_best_so_far', epochs=20)
+        stopper = FinishIfNoImprovementAfter('val_cost_best_so_far', iterations=3000)
         validation_set_monitoring.extend([tracker, saver, stopper])
 
     main_loop = MainLoop(
