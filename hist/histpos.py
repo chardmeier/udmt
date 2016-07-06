@@ -69,6 +69,7 @@ class TrainingConfiguration(Configuration):
         self.approx_nwords = None
         self.early_stopping = None
         self.pos_weight = 0.5
+        self.batch_size = 10
         self.num_batches = 100000
         self.step_rule = 'original'
         self.l2_penalty = 0.0
@@ -349,7 +350,7 @@ def train(postagger, train_config, dataset, save_path, pos_validation_set=None, 
 
     # dataset.example_iteration_scheme = ShuffledScheme(dataset.num_examples, 10)
     data_stream = dataset.get_example_stream()
-    data_stream = Batch(data_stream, iteration_scheme=ConstantScheme(10))
+    data_stream = Batch(data_stream, iteration_scheme=ConstantScheme(train_config.batch_size))
     data_stream = FilterSources(data_stream,
                                 sources=('pos_chars', 'pos_word_mask', 'pos_targets',
                                          'norm_chars', 'norm_word_mask',
