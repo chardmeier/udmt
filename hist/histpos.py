@@ -105,9 +105,8 @@ class HistPOSTagger(Initializable):
         self.squash_embeddings = net_config.squash_embeddings
 
         self.diff_loss = diff_loss
-        if diff_loss == 'crossentropy':
-            # Cross-entropy doesn't work without this.
-            self.squash_embeddings = True
+        if diff_loss == 'crossentropy' and not self.squash_embeddings:
+            raise ValueError('Crossentropy diff loss requires squash_embeddings to be set in network config.')
 
         self.norm_embedder = norm_embedder
         self.hist_embedder = hist_embedder
