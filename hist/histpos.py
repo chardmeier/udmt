@@ -204,7 +204,9 @@ def load_conll(infile, chars_voc=None, pos_voc=None, approx_nwords=None):
 
         if approx_nwords:
             chunk_len = len(snt_words) // (len(snt_words) // approx_nwords + 1) + 1
-            split_points = list(range(0, len(snt_words), chunk_len))
+            split_points = list(range(chunk_len, len(snt_words), chunk_len))
+            if split_points and len(snt_words) - split_points[-1] < 5:
+                split_points.pop()
 
         for i, (word, postag) in enumerate(snt):
             snt_chars.extend(chars_voc.get(c, chars_voc['<UNK>']) for c in word)
@@ -273,7 +275,9 @@ def load_historical(infile, chars_voc=None, approx_nwords=None):
 
         if approx_nwords:
             chunk_len = len(snt_pairs) // (len(snt_pairs) // approx_nwords + 1) + 1
-            split_points = list(range(0, len(snt_pairs), chunk_len))
+            split_points = list(range(chunk_len, len(snt_pairs), chunk_len))
+            if split_points and len(snt_pairs) - split_points[-1] < 5:
+                split_points.pop()
 
         for i, (hist, norm) in enumerate(snt_pairs):
             hist_word = list(chars_voc.get(c, chars_voc['<UNK>']) for c in hist)
