@@ -14,7 +14,7 @@ from blocks.model import Model
 from blocks.roles import INPUT, WEIGHT
 from blocks.serialization import continue_training, load_parameters
 from dependency import conll_trees
-from fuel.transformers import Batch, FilterSources, Mapping, Padding
+from fuel.transformers import Batch, FilterSources, Mapping, Padding, SortMapping, Unpack
 from fuel.datasets import IndexableDataset
 from fuel.schemes import ConstantScheme
 from hist.chain_crf import ChainCRF
@@ -70,6 +70,7 @@ class TrainingConfiguration(Configuration):
         self.histval_file = None
         self.posval_file = None
         self.approx_nwords = None
+        self.sort_k_batches = None
         self.early_stopping = None
         self.pos_weight = 0.5
         self.batch_size = 10
@@ -376,11 +377,22 @@ def train(postagger, train_config, dataset, save_path,
 
     # dataset.example_iteration_scheme = ShuffledScheme(dataset.num_examples, 10)
     data_stream = dataset.get_example_stream()
-    data_stream = Batch(data_stream, iteration_scheme=ConstantScheme(train_config.batch_size))
     data_stream = FilterSources(data_stream,
                                 sources=('pos_chars', 'pos_word_mask', 'pos_targets',
                                          'norm_chars', 'norm_word_mask',
                                          'hist_chars', 'hist_word_mask'))
+
+    if train_config.sort_k_batches:
+        # Sort on norm length because it's also correlated with hist length.
+        def _norm_length(t):
+            return len(t[3])
+
+        data_stream = Batch(data_stream,
+                            iteration_scheme=ConstantScheme(train_config.sort_k_batches * train_config.batch_size))
+        data_stream = Mapping(data_stream, SortMapping(_norm_length))
+        data_stream = Unpack(data_stream)
+
+    data_stream = Batch(data_stream, iteration_scheme=ConstantScheme(train_config.batch_size))
     data_stream = Padding(data_stream)
     data_stream = FilterSources(data_stream,
                                 sources=('pos_chars', 'pos_chars_mask', 'pos_word_mask', 'pos_targets',
