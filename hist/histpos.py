@@ -477,7 +477,7 @@ def train(postagger, train_config, dataset, save_path,
         observables, prefix="average", every_n_batches=25)
 
     extensions = [
-        Timing(),
+        Timing(every_n_batches=25),
         TrainingDataMonitoring(observables, after_batch=True),
         average_monitoring
     ]
