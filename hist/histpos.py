@@ -357,6 +357,9 @@ class ValidationCostCombiner(SimpleExtension):
         self.main_loop.log.current_row['val_cost'] = val_cost
 
 
+def _first_length(t):
+    return len(t[0])
+
 def train(postagger, train_config, pos_ds, hist_ds, save_path,
           pos_validation_set=None, hist_validation_set=None):
     # Data processing pipeline
@@ -371,10 +374,6 @@ def train(postagger, train_config, pos_ds, hist_ds, save_path,
                                               'hist_chars', 'hist_word_mask'))
 
     if train_config.sort_k_batches:
-        # Sort on norm length because it's also correlated with hist length.
-        def _first_length(t):
-            return len(t[0])
-
         pos_data_stream = Batch(pos_data_stream,
                                 iteration_scheme=ConstantScheme(train_config.sort_k_batches * train_config.batch_size))
         pos_data_stream = Mapping(pos_data_stream, SortMapping(_first_length))
