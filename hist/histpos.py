@@ -63,6 +63,7 @@ class HistPOSTaggerConfiguration(Configuration):
 
 class TrainingConfiguration(Configuration):
     def __init__(self):
+        self.nan_guard = False
         self.histtrain_file = None
         self.postrain_file = None
         self.histval_file = None
@@ -444,11 +445,15 @@ def train(postagger, train_config, dataset, save_path,
     else:
         raise ValueError('Unknow step rule: ' + train_config.step_rule)
 
+    theano_args = {}
+    if train_config.nan_guard:
+        theano_args['mode'] = NanGuardMode(nan_is_error=True,
+                                           inf_is_error=True,
+                                           big_is_error=True)
+
     # Define the training algorithm.
     algorithm = GradientDescent(cost=cost, parameters=cg.parameters, step_rule=step_rule_obj,
-                                theano_func_kwargs={'mode': NanGuardMode(nan_is_error=True,
-                                                                         inf_is_error=True,
-                                                                         big_is_error=True)})
+                                theano_func_kwargs=theano_args)
 
     # Fetch variables useful for debugging
     batch_size = pos_chars.shape[1].copy(name="batch_size")
