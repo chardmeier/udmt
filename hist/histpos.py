@@ -3,7 +3,7 @@ from blocks.algorithms import (GradientDescent, Scale,
 from blocks.bricks import application, Initializable
 from blocks.extensions import FinishAfter, Printing, SimpleExtension, Timing
 from blocks.extensions.monitoring import DataStreamMonitoring, TrainingDataMonitoring
-from blocks.extensions.saveload import Checkpoint, Load
+from blocks.extensions.saveload import Checkpoint
 from blocks.extensions.stopping import FinishIfNoImprovementAfter
 from blocks.extensions.training import TrackTheBest
 from blocks.filter import VariableFilter
@@ -12,7 +12,7 @@ from blocks.initialization import Constant, IsotropicGaussian
 from blocks.main_loop import MainLoop
 from blocks.model import Model
 from blocks.roles import INPUT, WEIGHT
-from blocks.serialization import load_parameters
+from blocks.serialization import continue_training, load_parameters
 from dependency import conll_trees
 from fuel.transformers import Batch, FilterSources, Mapping, Padding
 from fuel.datasets import IndexableDataset
@@ -346,7 +346,7 @@ class ValidationCostCombiner(SimpleExtension):
 
 
 def train(postagger, train_config, dataset, save_path,
-          reload=False, pos_validation_set=None, hist_validation_set=None):
+          pos_validation_set=None, hist_validation_set=None):
     # Data processing pipeline
 
     # dataset.example_iteration_scheme = ShuffledScheme(dataset.num_examples, 10)
@@ -517,9 +517,6 @@ def train(postagger, train_config, dataset, save_path,
     extensions.append(Checkpoint(save_path, every_n_batches=500, save_separately=["model", "log"]))
 
     extensions.append(Printing(every_n_batches=25))
-
-    if reload:
-        extensions.append(Load(save_path, load_iteration_state=True))
 
     main_loop = MainLoop(
         model=model,
@@ -731,9 +728,7 @@ def main():
         help="Don't use CRF for prediction even if available.")
     args = parser.parse_args()
 
-    if args.mode == "train" or args.mode == "continue":
-        reload = (args.mode == 'continue')
-
+    if args.mode == "train":
         train_config = TrainingConfiguration()
         if args.train_config is not None:
             with open(args.train_config, 'r') as f:
@@ -770,8 +765,10 @@ def main():
         print('Network configuration:\n' + net_config.dump_json(), file=sys.stderr)
 
         save_metadata(args.taggermodel, net_config, chars_voc, pos_voc)
-        train(tagger, train_config, train_ds, args.taggermodel, reload=reload,
+        train(tagger, train_config, train_ds, args.taggermodel,
               pos_validation_set=posval_ds, hist_validation_set=histval_ds)
+    elif args.mode == "continue":
+        continue_training(args.taggermodel)
     elif args.mode == "predict":
         net_config, chars_voc, pos_voc = load_metadata(args.taggermodel)
         tagger = HistPOSTagger(net_config)
