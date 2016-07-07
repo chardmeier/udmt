@@ -3,7 +3,7 @@ from blocks.algorithms import (GradientDescent, Scale,
 from blocks.bricks import application, Initializable
 from blocks.extensions import FinishAfter, Printing, SimpleExtension, Timing
 from blocks.extensions.monitoring import DataStreamMonitoring, TrainingDataMonitoring
-from blocks.extensions.saveload import Checkpoint
+from blocks.extensions.saveload import Checkpoint, Load
 from blocks.extensions.stopping import FinishIfNoImprovementAfter
 from blocks.extensions.training import TrackTheBest
 from blocks.filter import VariableFilter
@@ -345,7 +345,8 @@ class ValidationCostCombiner(SimpleExtension):
         self.main_loop.log.current_row['val_cost'] = val_cost
 
 
-def train(postagger, train_config, dataset, save_path, pos_validation_set=None, hist_validation_set=None):
+def train(postagger, train_config, dataset, save_path,
+          reload=False, pos_validation_set=None, hist_validation_set=None):
     # Data processing pipeline
 
     # dataset.example_iteration_scheme = ShuffledScheme(dataset.num_examples, 10)
@@ -456,7 +457,12 @@ def train(postagger, train_config, dataset, save_path, pos_validation_set=None, 
     average_monitoring = TrainingDataMonitoring(
         observables, prefix="average", every_n_batches=25)
 
-    validation_set_monitoring = []
+    extensions = [
+        Timing(),
+        TrainingDataMonitoring(observables, after_batch=True),
+        average_monitoring
+    ]
+
     if pos_validation_set:
         pos_val_data_stream = pos_validation_set.get_example_stream()
         pos_val_data_stream = Batch(pos_val_data_stream, iteration_scheme=ConstantScheme(30))
@@ -470,7 +476,7 @@ def train(postagger, train_config, dataset, save_path, pos_validation_set=None, 
         val_pos_cost = pos_cost.copy(name='val_pos_cost')
 
         pos_monitoring = DataStreamMonitoring([val_pos_cost], pos_val_data_stream, after_n_batches=500)
-        validation_set_monitoring.append(pos_monitoring)
+        extensions.append(pos_monitoring)
 
     if hist_validation_set:
         hist_val_data_stream = hist_validation_set.get_example_stream()
@@ -487,11 +493,11 @@ def train(postagger, train_config, dataset, save_path, pos_validation_set=None, 
         val_diff_cost = diff_cost.copy(name='val_diff_cost')
 
         hist_monitoring = DataStreamMonitoring([val_diff_cost], hist_val_data_stream, after_n_batches=500)
-        validation_set_monitoring.append(hist_monitoring)
+        extensions.append(hist_monitoring)
 
     if pos_validation_set and hist_validation_set:
         combine_cost = ValidationCostCombiner(train_config.pos_weight, after_n_batches=500)
-        validation_set_monitoring.append(combine_cost)
+        extensions.append(combine_cost)
 
     if train_config.early_stopping == "val_cost":
         if not (pos_validation_set and hist_validation_set):
@@ -500,27 +506,26 @@ def train(postagger, train_config, dataset, save_path, pos_validation_set=None, 
         saver = Checkpoint(save_path + '.best', after_n_batches=500, save_separately=['model', 'log']).\
             add_condition(['after_epoch'], _best_so_far_flag)
         stopper = FinishIfNoImprovementAfter('val_cost_best_so_far', iterations=3000)
-        validation_set_monitoring.extend([tracker, saver, stopper])
+        extensions.extend([tracker, saver, stopper])
+
+    # This shows a way to handle NaN emerging during
+    # training: simply finish it.
+    extensions.append(FinishAfter(after_n_batches=train_config.num_batches).add_condition(["after_batch"], _is_nan))
+
+    # Saving the model and the log separately is convenient,
+    # because loading the whole pickle takes quite some time.
+    extensions.append(Checkpoint(save_path, every_n_batches=500, save_separately=["model", "log"]))
+
+    extensions.append(Printing(every_n_batches=25))
+
+    if reload:
+        extensions.append(Load(save_path, load_iteration_state=True))
 
     main_loop = MainLoop(
         model=model,
         data_stream=data_stream,
         algorithm=algorithm,
-        extensions=[
-                       Timing(),
-                       TrainingDataMonitoring(observables, after_batch=True),
-                       average_monitoring
-                   ] + validation_set_monitoring + [
-                       FinishAfter(after_n_batches=train_config.num_batches)
-                           # This shows a way to handle NaN emerging during
-                           # training: simply finish it.
-                           .add_condition(["after_batch"], _is_nan),
-                       # Saving the model and the log separately is convenient,
-                       # because loading the whole pickle takes quite some time.
-                       Checkpoint(save_path, every_n_batches=500,
-                                  save_separately=["model", "log"]),
-                       Printing(every_n_batches=25)
-                   ])
+        extensions=extensions)
     main_loop.run()
 
 
@@ -700,7 +705,7 @@ def main():
         "POS tagger",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument(
-        "mode", choices=["train", "predict", "eval", "train-crf"],
+        "mode", choices=["train", "continue", "predict", "eval", "train-crf"],
         help="The mode to run. In the `train` mode a model is trained."
              " In the `predict` mode a trained model is "
              " to used to tag the input text.")
@@ -726,7 +731,9 @@ def main():
         help="Don't use CRF for prediction even if available.")
     args = parser.parse_args()
 
-    if args.mode == "train":
+    if args.mode == "train" or args.mode == "continue":
+        reload = (args.mode == 'continue')
+
         train_config = TrainingConfiguration()
         if args.train_config is not None:
             with open(args.train_config, 'r') as f:
@@ -763,7 +770,7 @@ def main():
         print('Network configuration:\n' + net_config.dump_json(), file=sys.stderr)
 
         save_metadata(args.taggermodel, net_config, chars_voc, pos_voc)
-        train(tagger, train_config, train_ds, args.taggermodel,
+        train(tagger, train_config, train_ds, args.taggermodel, reload=reload,
               pos_validation_set=posval_ds, hist_validation_set=histval_ds)
     elif args.mode == "predict":
         net_config, chars_voc, pos_voc = load_metadata(args.taggermodel)
