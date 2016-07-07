@@ -131,9 +131,10 @@ class HistPOSTagger(Initializable):
             norm_enc_trunc = sigmoid(norm_enc_trunc)
             # Clip hist_enc to safe range because of logarithm.
             hist_enc_trunc = tensor.clip(sigmoid(hist_enc_trunc), 1e-10, 1.0 - 1e-7)
-            diff_cost = (collected_mask *
-                         (norm_enc_trunc * tensor.log(hist_enc_trunc) +
-                          ((1.0 - norm_enc_trunc) * tensor.log(1.0 - hist_enc_trunc))).sum(axis=2)).sum(axis=0).mean()
+            diff_cost = -(collected_mask *
+                          (norm_enc_trunc * tensor.log(hist_enc_trunc) +
+                           ((1.0 - norm_enc_trunc) * tensor.log(1.0 - hist_enc_trunc)))
+                          .sum(axis=2)).sum(axis=0).mean()
         else:
             raise ValueError
 
