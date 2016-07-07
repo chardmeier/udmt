@@ -59,6 +59,7 @@ class HistPOSTaggerConfiguration(Configuration):
         self.recurrent_type = 'rnn'
         self.sequence_dims = [50, 150, 51]
         self.hidden_dims = []
+        self.squash_embeddings = False
 
 
 class TrainingConfiguration(Configuration):
@@ -101,7 +102,12 @@ class HistPOSTagger(Initializable):
         predictor = TagPredictor([net_config.sequence_dims[-1]] + net_config.hidden_dims + [net_config.pos_dimension])
         self.children.append(predictor)
 
+        self.squash_embeddings = net_config.squash_embeddings
+
         self.diff_loss = diff_loss
+        if diff_loss == 'crossentropy':
+            # Cross-entropy doesn't work without this.
+            self.squash_embeddings = True
 
         self.norm_embedder = norm_embedder
         self.hist_embedder = hist_embedder
@@ -110,6 +116,8 @@ class HistPOSTagger(Initializable):
     @application
     def pos_cost(self, pos_chars, pos_chars_mask, pos_word_mask, pos_targets):
         pos_encoded, pos_collected_mask = self.norm_embedder.apply(pos_chars, pos_chars_mask, pos_word_mask)
+        if self.squash_embeddings:
+            pos_encoded = sigmoid(pos_encoded)
         pos_cost = self.predictor.cost(pos_encoded, pos_collected_mask, pos_targets)
 
         return pos_cost
@@ -128,13 +136,15 @@ class HistPOSTagger(Initializable):
         norm_enc_trunc = norm_encoded[0:min_length, :]
         hist_enc_trunc = hist_encoded[0:min_length, :]
 
+        if self.squash_embeddings:
+            norm_enc_trunc = sigmoid(norm_enc_trunc)
+            hist_enc_trunc = sigmoid(hist_enc_trunc)
+
         if self.diff_loss == 'squared_error':
             diff_cost = (collected_mask * tensor.sqr(norm_enc_trunc - hist_enc_trunc).sum(axis=2)).sum(axis=0).mean()
         elif self.diff_loss == 'crossentropy':
-            # Convert embeddings to logistic sigmoid to get the correct range for crossentropy.
-            norm_enc_trunc = sigmoid(norm_enc_trunc)
             # Clip hist_enc to safe range because of logarithm.
-            hist_enc_trunc = tensor.clip(sigmoid(hist_enc_trunc), 1e-10, 1.0 - 1e-7)
+            hist_enc_trunc = tensor.clip(hist_enc_trunc, 1e-10, 1.0 - 1e-7)
             diff_cost = -(collected_mask *
                           (norm_enc_trunc * tensor.log(hist_enc_trunc) +
                            ((1.0 - norm_enc_trunc) * tensor.log(1.0 - hist_enc_trunc)))
@@ -154,6 +164,10 @@ class HistPOSTagger(Initializable):
             raise ValueError
 
         encoded, collected_mask = embedder_net.apply(chars, chars_mask, word_mask)
+
+        if self.squash_embeddings:
+            encoded = sigmoid(encoded)
+
         return self.predictor.apply(encoded), collected_mask
 
 
