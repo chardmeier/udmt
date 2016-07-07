@@ -728,10 +728,16 @@ def save_metadata(outfile, net_config, chars_voc, pos_voc):
 
 def load_metadata(infile):
     with open(infile + '.meta', 'rb') as f:
+        # Use a configuration objection of our own creation to make sure we have
+        # all attributes even if the metadata file was created with an older version
+        # of the software.
+        my_net_config = HistPOSTaggerConfiguration()
         net_config = pickle.load(f)
+        my_net_config.__dict__.update(net_config.__dict__)
+
         chars_voc = pickle.load(f)
         pos_voc = pickle.load(f)
-    return net_config, chars_voc, pos_voc
+    return my_net_config, chars_voc, pos_voc
 
 
 def main():
