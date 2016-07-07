@@ -1,6 +1,6 @@
 from blocks.algorithms import (GradientDescent, Scale,
                                StepClipping, CompositeRule, RMSProp, Adam, Momentum, AdaGrad)
-from blocks.bricks import application, Initializable
+from blocks.bricks import application, Initializable, Logistic, Rectifier, Tanh
 from blocks.extensions import FinishAfter, Printing, SimpleExtension, Timing
 from blocks.extensions.monitoring import DataStreamMonitoring, TrainingDataMonitoring
 from blocks.extensions.saveload import Checkpoint
@@ -59,6 +59,7 @@ class HistPOSTaggerConfiguration(Configuration):
         self.recurrent_type = 'rnn'
         self.sequence_dims = [50, 150, 51]
         self.hidden_dims = []
+        self.ff_activation = 'tanh'
         self.squash_embeddings = False
 
 
@@ -100,7 +101,9 @@ class HistPOSTagger(Initializable):
             norm_embedder = WordEmbedding(net_config.alphabet_size, net_config.sequence_dims, net_config.recurrent_type, name='norm_embedder')
             self.children.append(norm_embedder)
 
-        predictor = TagPredictor([net_config.sequence_dims[-1]] + net_config.hidden_dims + [net_config.pos_dimension])
+        activations = {'tanh': Tanh(), 'logistic': Logistic(), 'relu': Rectifier()}
+        predictor = TagPredictor([net_config.sequence_dims[-1]] + net_config.hidden_dims + [net_config.pos_dimension],
+                                 prototype=activations[net_config.ff_activation])
         self.children.append(predictor)
 
         self.squash_embeddings = net_config.squash_embeddings
