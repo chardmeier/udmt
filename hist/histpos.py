@@ -77,6 +77,9 @@ class TrainingConfiguration(Configuration):
         self.dropout_rate = 0.0
         self.crf_c = 1.0
         self.diff_loss = 'squared_error'
+        self.val_interval = 500
+        self.val_patience = 3000
+        self.checkpoint_interval = 1000
 
 
 class HistPOSTagger(Initializable):
@@ -486,7 +489,8 @@ def train(postagger, train_config, dataset, save_path,
 
         val_pos_cost = pos_cost.copy(name='val_pos_cost')
 
-        pos_monitoring = DataStreamMonitoring([val_pos_cost], pos_val_data_stream, after_n_batches=500)
+        pos_monitoring = DataStreamMonitoring([val_pos_cost], pos_val_data_stream,
+                                              after_n_batches=train_config.val_interval)
         extensions.append(pos_monitoring)
 
     if hist_validation_set:
@@ -503,20 +507,23 @@ def train(postagger, train_config, dataset, save_path,
 
         val_diff_cost = diff_cost.copy(name='val_diff_cost')
 
-        hist_monitoring = DataStreamMonitoring([val_diff_cost], hist_val_data_stream, after_n_batches=500)
+        hist_monitoring = DataStreamMonitoring([val_diff_cost], hist_val_data_stream,
+                                               after_n_batches=train_config.val_interval)
         extensions.append(hist_monitoring)
 
     if pos_validation_set and hist_validation_set:
-        combine_cost = ValidationCostCombiner(train_config.pos_weight, after_n_batches=500)
+        combine_cost = ValidationCostCombiner(train_config.pos_weight,
+                                              after_n_batches=train_config.val_interval)
         extensions.append(combine_cost)
 
     if train_config.early_stopping == "val_cost":
         if not (pos_validation_set and hist_validation_set):
             raise ValueError("Need both hist and pos validation sets for early stopping.")
         tracker = TrackTheBest('val_cost')
-        saver = Checkpoint(save_path + '.best', after_n_batches=500, save_separately=['model', 'log']).\
+        saver = Checkpoint(save_path + '.best', after_n_batches=train_config.val_interval,
+                           save_main_loop=False).\
             add_condition(['after_epoch'], _best_so_far_flag)
-        stopper = FinishIfNoImprovementAfter('val_cost_best_so_far', iterations=3000)
+        stopper = FinishIfNoImprovementAfter('val_cost_best_so_far', iterations=train_config.val_patience)
         extensions.extend([tracker, saver, stopper])
 
     # This shows a way to handle NaN emerging during
@@ -525,7 +532,8 @@ def train(postagger, train_config, dataset, save_path,
 
     # Saving the model and the log separately is convenient,
     # because loading the whole pickle takes quite some time.
-    extensions.append(Checkpoint(save_path, every_n_batches=500, save_separately=["model", "log"]))
+    extensions.append(Checkpoint(save_path, every_n_batches=train_config.checkpoint_interval,
+                                 save_separately=["model", "log"]))
 
     extensions.append(Printing(every_n_batches=25))
 
