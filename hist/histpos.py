@@ -14,9 +14,9 @@ from blocks.model import Model
 from blocks.roles import INPUT, WEIGHT
 from blocks.serialization import continue_training, load_parameters
 from dependency import conll_trees
-from fuel.transformers import Batch, FilterSources, Mapping, Padding, SortMapping, Unpack
+from fuel.transformers import Batch, FilterSources, Mapping, Merge, Padding, SortMapping, Unpack
 from fuel.datasets import IndexableDataset
-from fuel.schemes import ConstantScheme
+from fuel.schemes import ConstantScheme, ShuffledExampleScheme
 from hist.chain_crf import ChainCRF
 from hist.tagger import load_vertical, TagPredictor, WordEmbedding
 from pystruct.learners import FrankWolfeSSVM
@@ -70,8 +70,8 @@ class TrainingConfiguration(Configuration):
         self.histval_file = None
         self.posval_file = None
         self.approx_nwords = None
-        self.sort_k_batches = None
         self.early_stopping = None
+        self.sort_k_batches = 25
         self.pos_weight = 0.5
         self.batch_size = 10
         self.num_batches = 100000
@@ -339,23 +339,6 @@ def load_historical(infile, chars_voc=None, approx_nwords=None):
     return data, chars_voc
 
 
-def join_training_data(pos_data, hist_data):
-    pos_size = len(list(pos_data.values())[0])
-    hist_size = len(list(hist_data.values())[0])
-    max_size = max(pos_size, hist_size)
-
-    pos_sample = numpy.random.choice(pos_size, size=max_size, replace=True)
-    hist_sample = numpy.random.choice(hist_size, size=max_size, replace=True)
-
-    all_data = collections.OrderedDict()
-    for key, val in pos_data.items():
-        all_data[key] = [val[i] for i in numpy.nditer(pos_sample)]
-    for key, val in hist_data.items():
-        all_data[key] = [val[i] for i in numpy.nditer(hist_sample)]
-
-    return IndexableDataset(all_data)
-
-
 class ValidationCostCombiner(SimpleExtension):
     def __init__(self, pos_weight, **kwargs):
         self.pos_weight = pos_weight
@@ -371,26 +354,38 @@ class ValidationCostCombiner(SimpleExtension):
         self.main_loop.log.current_row['val_cost'] = val_cost
 
 
-def train(postagger, train_config, dataset, save_path,
+def train(postagger, train_config, pos_ds, hist_ds, save_path,
           pos_validation_set=None, hist_validation_set=None):
     # Data processing pipeline
 
-    # dataset.example_iteration_scheme = ShuffledScheme(dataset.num_examples, 10)
-    data_stream = dataset.get_example_stream()
-    data_stream = FilterSources(data_stream,
-                                sources=('pos_chars', 'pos_word_mask', 'pos_targets',
-                                         'norm_chars', 'norm_word_mask',
-                                         'hist_chars', 'hist_word_mask'))
+    pos_data_stream = pos_ds.get_example_stream()
+    pos_data_stream = FilterSources(pos_data_stream,
+                                    sources=('pos_chars', 'pos_word_mask', 'pos_targets'))
+
+    hist_data_stream = hist_ds.get_example_stream()
+    hist_data_stream = FilterSources(hist_data_stream,
+                                     sources=('norm_chars', 'norm_word_mask',
+                                              'hist_chars', 'hist_word_mask'))
 
     if train_config.sort_k_batches:
         # Sort on norm length because it's also correlated with hist length.
-        def _norm_length(t):
-            return len(t[3])
+        def _first_length(t):
+            return len(t[0])
 
-        data_stream = Batch(data_stream,
-                            iteration_scheme=ConstantScheme(train_config.sort_k_batches * train_config.batch_size))
-        data_stream = Mapping(data_stream, SortMapping(_norm_length))
-        data_stream = Unpack(data_stream)
+        pos_data_stream = Batch(pos_data_stream,
+                                iteration_scheme=ConstantScheme(train_config.sort_k_batches * train_config.batch_size))
+        pos_data_stream = Mapping(pos_data_stream, SortMapping(_first_length))
+        pos_data_stream = Unpack(pos_data_stream)
+
+        hist_data_stream = Batch(hist_data_stream,
+                                 iteration_scheme=ConstantScheme(train_config.sort_k_batches * train_config.batch_size))
+        hist_data_stream = Mapping(hist_data_stream, SortMapping(_first_length))
+        hist_data_stream = Unpack(hist_data_stream)
+
+    data_stream = Merge([pos_data_stream, hist_data_stream],
+                        ('pos_chars', 'pos_word_mask', 'pos_targets',
+                         'norm_chars', 'norm_word_mask',
+                         'hist_chars', 'hist_word_mask'))
 
     data_stream = Batch(data_stream, iteration_scheme=ConstantScheme(train_config.batch_size))
     data_stream = Padding(data_stream)
@@ -795,7 +790,24 @@ def main():
         with open(train_config.postrain_file, 'r') as f:
             pos_data, _, pos_voc = load_conll(f, chars_voc=chars_voc, approx_nwords=train_config.approx_nwords)
 
-        train_ds = join_training_data(pos_data, hist_data)
+        pos_ds = IndexableDataset(pos_data)
+        hist_ds = IndexableDataset(hist_data)
+
+        pos_size = pos_ds.num_examples
+        hist_size = hist_ds.num_examples
+        max_size = max(pos_size, hist_size)
+
+        if pos_size < hist_size:
+            pos_sample = numpy.random.choice(pos_size, size=max_size, replace=True)
+            pos_ds.example_iteration_scheme = ShuffledExampleScheme(pos_sample)
+            hist_ds.example_iteration_scheme = ShuffledExampleScheme(hist_size)
+        elif pos_size > hist_size:
+            hist_sample = numpy.random.choice(hist_size, size=max_size, replace=True)
+            pos_ds.example_iteration_scheme = ShuffledExampleScheme(pos_size)
+            hist_ds.example_iteration_scheme = ShuffledExampleScheme(hist_sample)
+        else:
+            pos_ds.example_iteration_scheme = ShuffledExampleScheme(pos_size)
+            hist_ds.example_iteration_scheme = ShuffledExampleScheme(hist_size)
 
         posval_ds = None
         if train_config.posval_file:
@@ -820,7 +832,7 @@ def main():
         print('Network configuration:\n' + net_config.dump_json(), file=sys.stderr)
 
         save_metadata(args.taggermodel, net_config, chars_voc, pos_voc)
-        train(tagger, train_config, train_ds, args.taggermodel,
+        train(tagger, train_config, pos_ds, hist_ds, args.taggermodel,
               pos_validation_set=posval_ds, hist_validation_set=histval_ds)
     elif args.mode == "continue":
         continue_training(args.taggermodel)
