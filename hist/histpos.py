@@ -678,11 +678,26 @@ def evaluate(postagger, dataset, save_path, pos_voc, embedder='norm', use_crf=Fa
 
     print('Accuracy: %5d/%5d = %6f\n' % (matches, total, matches / total))
     for i in range(npos):
-        print('%10s : P = %4d/%4d = %6f      R = %4d/%4d = %6f      F = %6f' %
+        # NaNs mess up column alignment, so we need some extra formatting.
+        fsc = '%6f' % fscore[i]
+
+        if pred_table[i] > 0:
+            prc = '%6f' % precision[i]
+        else:
+            prc = '   ---  '
+            fsc = '   ---  '
+
+        if gold_table[i] > 0:
+            rec = '%6f' % recall[i]
+        else:
+            rec = '   ---  '
+            fsc = '   ---  '
+
+        print('%10s : P = %4d/%4d = %s      R = %4d/%4d = %s      F = %s' %
               (reverse_pos[i],
-               hit_table[i], pred_table[i], precision[i],
-               hit_table[i], gold_table[i], recall[i],
-               fscore[i]))
+               hit_table[i], pred_table[i], prc,
+               hit_table[i], gold_table[i], rec,
+               fsc))
 
 
 def train_crf(postagger, tagger_model, train_config, dataset, embedder='norm'):
