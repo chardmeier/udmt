@@ -360,6 +360,7 @@ class ValidationCostCombiner(SimpleExtension):
 def _first_length(t):
     return len(t[0])
 
+
 def train(postagger, train_config, pos_ds, hist_ds, save_path,
           pos_validation_set=None, hist_validation_set=None):
     # Data processing pipeline
