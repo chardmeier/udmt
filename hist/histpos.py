@@ -95,10 +95,12 @@ class HistPOSTagger(Initializable):
             self.children.append(hist_embedder)
             norm_embedder = hist_embedder
         else:
-            hist_embedder = WordEmbedding(net_config.alphabet_size, net_config.sequence_dims, net_config.recurrent_type, name='hist_embedder')
+            hist_embedder = WordEmbedding(net_config.alphabet_size, net_config.sequence_dims, net_config.recurrent_type,
+                                          name='hist_embedder')
             self.children.append(hist_embedder)
 
-            norm_embedder = WordEmbedding(net_config.alphabet_size, net_config.sequence_dims, net_config.recurrent_type, name='norm_embedder')
+            norm_embedder = WordEmbedding(net_config.alphabet_size, net_config.sequence_dims, net_config.recurrent_type,
+                                          name='norm_embedder')
             self.children.append(norm_embedder)
 
         activations = {'tanh': Tanh(), 'logistic': Logistic(), 'relu': Rectifier()}
