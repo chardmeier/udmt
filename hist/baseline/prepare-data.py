@@ -15,6 +15,8 @@ def process_parallel(infilename, srcfilename, tgtfilename):
             open(tgtfilename, 'w') as tgtfile:
         for line in infile:
             src, tgt = line.rstrip('\n').split('\t')
+            if not src or not tgt:
+                continue
             print(' '.join(src), file=srcfile)
             print(' '.join(tgt), file=tgtfile)
 
