@@ -671,7 +671,8 @@ def evaluate(postagger, dataset, save_path, pos_voc, embedder='norm', use_crf=Fa
 
     reverse_pos = {idx: word for word, idx in pos_voc.items()}
 
-    total = gold_table[3:].sum()
+    # Entry 0 contains unknown tags. Entries 1 and 2 are <S> and </S> and should be skipped.
+    total = gold_table[3:].sum() + gold_table[0]
     matches = hit_table[3:].sum()
 
     precision = hit_table / pred_table
