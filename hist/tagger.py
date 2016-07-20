@@ -18,7 +18,7 @@ from dependency import conll_trees
 from fuel.transformers import Batch, FilterSources, Mapping, Padding
 from fuel.datasets import IndexableDataset
 from fuel.schemes import ConstantScheme, ShuffledScheme
-from hist.word import BidirectionalWithCombination, CombineWords
+from hist.word import BidirectionalWithCombination, CombineWords, Concatenate
 from theano import tensor
 
 import argparse
@@ -125,15 +125,6 @@ def load_vertical(infile, chars_voc):
     return IndexableDataset(data)
 
 
-def make_merge_combiner(dimension):
-    combiner = Merge(input_names=['forward', 'backward'], input_dims=[dimension] * 2,
-                     output_dim=dimension, weights_init=IsotropicGaussian(0.1),
-                     biases_init=Constant(0))
-    combiner.children[0].use_bias = True
-    combiner.push_initialization_config()
-    return combiner
-
-
 class BidirectionalLayer(Initializable):
     def __init__(self, dimension, prototype, combiner, **kwargs):
         super().__init__(**kwargs)
@@ -178,16 +169,18 @@ class WordEmbedding(Initializable):
         lookup = LookupTable(alphabet_size, dimensions[0])
         sequences = []
         for i, (input_dim, output_dim, transition) in enumerate(zip(dimensions, dimensions[1:], transitions[:-1])):
-            sequences.append(BidirectionalLayer(input_dim,
+            sequences.append(BidirectionalLayer(input_dim if i == 0 else 2 * input_dim,
                                                 weights_init=Orthogonal(),
                                                 prototype=transition,
-                                                combiner=make_merge_combiner(output_dim),
+                                                combiner=Concatenate(input_names=['forward', 'backward'],
+                                                                     input_dims=[output_dim] * 2),
                                                 name='sequence%d' % i))
 
-        final_sequence = BidirectionalLayer(dimensions[-2],
+        final_sequence = BidirectionalLayer(dimensions[-2] if len(dimensions) == 2 else 2 * dimensions[-2],
                                             weights_init=Orthogonal(),
                                             prototype=transitions[-1],
-                                            combiner=CombineWords(make_merge_combiner(dimensions[-1])),
+                                            combiner=CombineWords(Concatenate(input_names=['forward', 'backward'],
+                                                                              input_dims=[dimensions[-1]] * 2)),
                                             name='sequence_final')
 
         self.lookup = lookup

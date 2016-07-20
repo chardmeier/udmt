@@ -104,7 +104,7 @@ class HistPOSTagger(Initializable):
             self.children.append(norm_embedder)
 
         activations = {'tanh': Tanh(), 'logistic': Logistic(), 'relu': Rectifier()}
-        predictor = TagPredictor([net_config.sequence_dims[-1]] + net_config.hidden_dims + [net_config.pos_dimension],
+        predictor = TagPredictor([net_config.sequence_dims[-1] * 2] + net_config.hidden_dims + [net_config.pos_dimension],
                                  prototype=activations[net_config.ff_activation])
         self.children.append(predictor)
 
