@@ -140,10 +140,11 @@ class BidirectionalLayer(Initializable):
 
     @application
     def apply(self, input_, **kwargs):
-        return self.sequence.apply(
+        output = self.sequence.apply(
             **dict_union(
                 self.fork.apply(input_, as_dict=True),
-                kwargs))
+                kwargs), as_dict=True)
+        return output['states']
 
     @apply.delegate
     def apply_delegate(self):

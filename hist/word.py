@@ -201,13 +201,9 @@ class BidirectionalWithCombination(Bidirectional):
                 combiner_kwargs['mask'] = tensor.ones(forward[0].shape[0:-1])
         return [self.combiner.apply(fwd, bwd, **combiner_kwargs) for fwd, bwd in equizip(forward, backward)]
 
-    @apply.property('sequences')
-    def apply_sequences(self):
-        return self.children[0].apply.sequences
-
-    @apply.property('outputs')
-    def apply_outputs(self):
-        return self.combiner.apply.outputs
+    @apply.delegate
+    def apply_delegate(self):
+        return self.children[0].apply
 
     def get_dim(self, name):
         if name in self.apply.outputs:
